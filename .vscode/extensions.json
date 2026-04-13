@@ -1,0 +1,12 @@
+{
+    "recommendations": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "rust-lang.rust-analyzer",
+        "tauri-apps.tauri-vscode",
+        "usernamehw.errorlens",
+        "formulahendry.auto-rename-tag",
+        "bradlc.vscode-tailwindcss",
+        "ms-vscode.vscode-typescript-next"
+    ]
+}

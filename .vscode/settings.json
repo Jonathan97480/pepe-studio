@@ -1,0 +1,59 @@
+{
+    "spellright.language": [
+        "fr"
+    ],
+    "spellright.documentTypes": [
+        "latex",
+        "scss",
+        "xml"
+    ],
+
+    // ── Formatage automatique ──────────────────────────────────────────
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        "editor.formatOnSave": true
+    },
+    "[toml]": {
+        "editor.defaultFormatter": "tamasfe.even-better-toml"
+    },
+
+    // ── ESLint ─────────────────────────────────────────────────────────
+    "eslint.validate": [
+        "javascript",
+        "javascriptreact",
+        "typescript",
+        "typescriptreact"
+    ],
+    "editor.codeActionsOnSave": {
+        "source.fixAll.eslint": "explicit"
+    },
+
+    // ── TypeScript ─────────────────────────────────────────────────────
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "typescript.enablePromptUseWorkspaceTsdk": true,
+
+    // ── Rust Analyzer ──────────────────────────────────────────────────
+    "rust-analyzer.cargo.buildScripts.enable": true,
+    "rust-analyzer.linkedProjects": ["src-tauri/Cargo.toml"],
+    "rust-analyzer.check.command": "check",
+
+    // ── Tailwind CSS ───────────────────────────────────────────────────
+    "tailwindCSS.experimental.classRegex": [
+        ["className\\s*=\\s*[\"'`]([^\"'`]*)[\"'`]"]
+    ],
+
+    // ── Fichiers exclus ────────────────────────────────────────────────
+    "files.exclude": {
+        "**/node_modules": true,
+        "src-tauri/target": true,
+        "**/.next": true
+    },
+    "search.exclude": {
+        "**/node_modules": true,
+        "src-tauri/target": true,
+        "**/.next": true,
+        "**/out": true
+    }
+}

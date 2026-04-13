@@ -1,0 +1,19 @@
+node_modules/
+.next/
+out/
+.DS_Store
+coverage/
+.env*
+**/dist/
+**/build/
+src-tauri/target/
+**/*.log
+
+# Zips / gros binaires
+*.zip
+*.gguf
+*.bin
+
+# Dossiers binaires lourds
+llama.cpp/
+models/

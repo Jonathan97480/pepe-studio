@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "🚀 Tauri Dev (Debug)",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "dev"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "serverReadyAction": {
+                "pattern": "ready started server on .+, url: (https?://.+)",
+                "uriFormat": "%s",
+                "action": "debugWithChrome"
+            }
+        },
+        {
+            "name": "🌐 Attach Chrome (Frontend)",
+            "type": "chrome",
+            "request": "attach",
+            "port": 9222,
+            "webRoot": "${workspaceFolder}/src",
+            "sourceMaps": true
+        }
+    ]
+}

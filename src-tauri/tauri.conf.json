@@ -1,0 +1,56 @@
+{
+  "build": {
+    "beforeBuildCommand": "",
+    "beforeDevCommand": "npm run dev",
+    "devPath": "http://localhost:3000",
+    "distDir": "../out"
+  },
+  "package": {
+    "productName": "Pepe-Studio",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "bundle": {
+      "active": true,
+      "targets": ["nsis", "msi"],
+      "identifier": "com.pepestudio.app",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.ico"
+      ],
+      "resources": [
+        "../llama.cpp/*"
+      ]
+    },
+    "windows": [
+      {
+        "title": "Pépé-Studio",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false,
+        "fileDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src blob: data: filesystem: ws: http: https: 'unsafe-eval' 'unsafe-inline';"
+    },
+    "allowlist": {
+      "fs": {
+        "all": true,
+        "scope": ["$APPDATA/pepe-studio", "$APPDATA/pepe-studio/**", "$HOME/pepe-studio", "$HOME/pepe-studio/**", "$RESOURCE/*"]
+      },
+      "dialog": {
+        "all": true
+      },
+      "shell": {
+        "all": true
+      },
+      "process": {
+        "all": true
+      }
+    }
+  }
+}
