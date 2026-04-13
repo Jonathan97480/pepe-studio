@@ -26,8 +26,8 @@ export default function FloatingWindow({
     children,
 }: FloatingWindowProps) {
     const [pos, setPos] = useState(() => ({
-        x: defaultX ?? Math.max(0, (window.innerWidth - defaultWidth) / 2),
-        y: defaultY ?? Math.max(0, (window.innerHeight - defaultHeight) / 4),
+        x: defaultX ?? (typeof window !== "undefined" ? Math.max(0, (window.innerWidth - defaultWidth) / 2) : 0),
+        y: defaultY ?? (typeof window !== "undefined" ? Math.max(0, (window.innerHeight - defaultHeight) / 4) : 0),
     }));
     const [size, setSize] = useState({ w: defaultWidth, h: defaultHeight });
     const [minimized, setMinimized] = useState(false);
