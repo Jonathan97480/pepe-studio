@@ -47,7 +47,8 @@ L'IA ne se contente plus de répondre — elle **agit**.
 - [Node.js](https://nodejs.org/) 18+
 - [Rust](https://rustup.rs/) (stable)
 - [Tauri CLI](https://tauri.app/v1/guides/getting-started/prerequisites)
-- Un modèle LLM au format GGUF dans le dossier `models/`
+- Un modèle LLM au format GGUF
+- Les binaires **llama.cpp**
 
 ---
 
@@ -59,12 +60,30 @@ cd pepe-studio
 npm install
 ```
 
+### 1. Télécharger llama.cpp
+
+Téléchargez la dernière release depuis [github.com/ggerganov/llama.cpp/releases](https://github.com/ggerganov/llama.cpp/releases).
+
+Choisissez l'archive correspondant à votre configuration (ex: `llama-b...-bin-win-cuda-cu12.x-x64.zip` pour GPU NVIDIA, ou `llama-b...-bin-win-noavx-x64.zip` pour CPU seul), puis extrayez son contenu dans le dossier `llama.cpp/` à la racine du projet :
+
+```
+llama.cpp/
+├── llama-server.exe
+├── llama.dll
+├── ggml.dll
+└── ...
+```
+
+### 2. Télécharger un modèle GGUF
+
 Placez votre modèle GGUF dans le dossier `models/` :
 
 ```
 models/
 └── votre-modele.gguf
 ```
+
+> Modèles recommandés : [Gemma 3](https://huggingface.co/google), [Mistral](https://huggingface.co/mistralai), [Qwen2.5](https://huggingface.co/Qwen) au format Q4/Q8.
 
 ---
 
