@@ -47,7 +47,8 @@ use std::sync::Mutex;
 use tauri::Manager;
 use terminal_manager::{
     close_terminal, create_terminal, get_terminal_history, list_terminals, terminal_exec,
-    TerminalManagerState,
+    terminal_kill_interactive, terminal_pty_resize, terminal_send_stdin,
+    terminal_start_interactive, InteractiveState, TerminalManagerState,
 };
 
 fn main() {
@@ -58,6 +59,7 @@ fn main() {
             app.manage(McpState::default());
             app.manage(DevServerState::default());
             app.manage(TerminalManagerState::default());
+            app.manage(InteractiveState::default());
             Ok(())
         })
         .manage(LlamaState::default())
@@ -132,6 +134,10 @@ fn main() {
             get_dev_server_info,
             create_terminal,
             terminal_exec,
+            terminal_start_interactive,
+            terminal_send_stdin,
+            terminal_kill_interactive,
+            terminal_pty_resize,
             list_terminals,
             close_terminal,
             get_terminal_history,

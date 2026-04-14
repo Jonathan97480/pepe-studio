@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open as shellOpen } from "@tauri-apps/api/shell";
 import { searchLibrary, queryDocs } from "../tools/Context7Client";
@@ -9,6 +9,20 @@ import type { LlamaLaunchConfig } from "../lib/llamaWrapper";
 import type { TurboQuantType } from "../context/ModelSettingsContext";
 import type { ChatMode } from "../lib/chatUtils";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+
+// Curseurs de lecture par terminal_id — pour ne retourner que le NOUVEAU texte après terminal_send_stdin
+const terminalReadCursors: Map<string, number> = new Map();
+
+/** Supprime les séquences d'échappement ANSI/VT pour ne passer que du texte brut au LLM. */
+function stripAnsi(s: string): string {
+    return s
+        .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "") // CSI sequences: ESC [ ... letter
+        .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "") // OSC sequences
+        .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, "") // DCS/SOS/PM/APC
+        .replace(/\x1b[=>]/g, "") // VT52 mode switches
+        .replace(/\r/g, "") // carriage returns
+        .replace(/\x1b\[\d*[ABCDK]/g, ""); // cursor movement leftovers
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Documentation intégrée de chaque outil — utilisée par get_tool_doc
@@ -100,6 +114,32 @@ Usage : <tool>{"list_terminals": ""}</tool>
     get_terminal_history: `=== get_terminal_history — Historique d'un terminal ===
 Usage : <tool>{"get_terminal_history": "term-1744456789"}</tool>
 • Retourne la liste des commandes exécutées avec leurs sorties.`,
+
+    terminal_start_interactive: `=== terminal_start_interactive — Processus interactif (SSH, REPL…) ===
+Usage : <tool>{"terminal_start_interactive": "ssh user@host", "terminal_id": "term-1744456789"}</tool>
+• Utilise pour TOUTE commande qui nécessite une saisie utilisateur : ssh, telnet, python REPL, node REPL…
+• La sortie s'affiche EN TEMPS RÉEL dans le panneau Terminal (xterm.js).
+• ⚠️ OBLIGATOIRE pour SSH — jamais cmd ni terminal_exec pour des connexions SSH.
+Exemples :
+  <tool>{"terminal_start_interactive": "ssh beroute@192.168.1.28", "terminal_id": "term-xxx"}</tool>
+  <tool>{"terminal_start_interactive": "ssh -o StrictHostKeyChecking=no beroute@192.168.1.28", "terminal_id": "term-xxx"}</tool>
+Flux SSH recommandé :
+  1. create_terminal (cwd = dossier quelconque)
+  2. terminal_start_interactive avec la commande ssh
+  3. Attendre que l'utilisateur entre son mot de passe (session en cours)
+  4. Envoyer les commandes distantes via terminal_send_stdin`,
+
+    terminal_send_stdin: `=== terminal_send_stdin — Envoyer une commande dans un terminal interactif actif ===
+Usage : <tool>{"terminal_send_stdin": "ls -la\\n", "terminal_id": "term-xxx"}</tool>
+• Envoie du texte brut au processus interactif en cours (SSH, REPL, etc.).
+• ✅ LA SORTIE EST AUTOMATIQUEMENT RETOURNÉE après ~2.5 s — tu n'as pas besoin de lire l'historique manuellement.
+• ⚠️ TOUJOURS ajouter \\n à la fin pour exécuter la commande (Entrée).
+• Ctrl+C : envoyer "\\x03" pour interrompre.
+• N'utilise JAMAIS terminal_exec quand un processus interactif est actif.
+Exemples (SSH connecté sur machine distante) :
+  <tool>{"terminal_send_stdin": "ls -la\\n", "terminal_id": "term-xxx"}</tool>
+  <tool>{"terminal_send_stdin": "cat /etc/hostname\\n", "terminal_id": "term-xxx"}</tool>
+  <tool>{"terminal_send_stdin": "iptables -L -n -v\\n", "terminal_id": "term-xxx"}</tool>`,
 
     create_skill: `=== create_skill — Créer un skill ===
 Types disponibles : ps1 (défaut), python, nodejs, http (single), http (multi-routes), composite.
@@ -971,6 +1011,8 @@ export function useToolCalling({
                             parsedTool.save_plan !== undefined ||
                             parsedTool.create_terminal !== undefined ||
                             parsedTool.terminal_exec !== undefined ||
+                            parsedTool.terminal_start_interactive !== undefined ||
+                            parsedTool.terminal_send_stdin !== undefined ||
                             parsedTool.close_terminal !== undefined
                         );
                         if (!forceExecute && isActionTool && chatModeRef.current === "ask") {
@@ -1157,8 +1199,16 @@ export function useToolCalling({
                                     10000,
                                 );
                                 await sendPrompt(
-                                    `[Terminal créé] ID: "${info.id}" | Nom: "${info.name}" | Répertoire: ${info.cwd}\n` +
-                                        `Utilise terminal_exec avec cet ID pour exécuter des commandes.`,
+                                    `[Terminal créé]\n` +
+                                        `⚠️ ID RÉEL (obligatoire pour toutes les commandes suivantes) : "${info.id}"\n` +
+                                        `Nom : "${info.name}" | Répertoire : ${info.cwd}\n` +
+                                        `\n` +
+                                        `Tu DOIS utiliser l'ID "${info.id}" (pas le nom) dans tous les appels suivants.\n` +
+                                        `Commandes disponibles :\n` +
+                                        `  • terminal_exec         → commandes ponctuelles non-interactives\n` +
+                                        `  • terminal_start_interactive → SSH, REPL et tout processus interactif\n` +
+                                        `Exemple SSH :\n` +
+                                        `  <tool>{"terminal_start_interactive": "ssh user@host", "terminal_id": "${info.id}"}</tool>`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -1215,6 +1265,151 @@ export function useToolCalling({
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
                                 await sendPrompt(`[Erreur close_terminal]: ${err}`, cfg);
+                            }
+                            return;
+                        }
+
+                        // ── terminal_start_interactive ────────────────────────
+                        if (parsedTool.terminal_start_interactive !== undefined) {
+                            onOpenTerminal?.();
+                            const tid = String(parsedTool.terminal_id ?? "");
+                            if (!tid) {
+                                await sendPrompt(
+                                    "[Erreur terminal_start_interactive] Paramètre terminal_id manquant.\n" +
+                                        "Flux correct :\n" +
+                                        "  1. create_terminal pour obtenir un terminal_id (format: term-XXXXXXXXXX)\n" +
+                                        "  2. terminal_start_interactive avec cet ID EXACT (ex: term-1776174852395)",
+                                    cfg,
+                                );
+                                return;
+                            }
+                            // Détecter si l'IA a passé un nom (sans "term-") au lieu d'un ID
+                            if (!tid.startsWith("term-")) {
+                                // Tenter de résoudre via list_terminals
+                                try {
+                                    const tlist = await invokeWithTimeout<{ id: string; name: string }[]>(
+                                        "list_terminals",
+                                        {},
+                                        5000,
+                                    );
+                                    const match = tlist.find((t) => t.name === tid || t.id === tid);
+                                    if (!match) {
+                                        await sendPrompt(
+                                            `[Erreur terminal_start_interactive] "${tid}" est un NOM, pas un ID.\n` +
+                                                `L'ID doit commencer par "term-" (ex: term-1776174852395).\n` +
+                                                `Terminaux disponibles :\n` +
+                                                tlist.map((t) => `  • "${t.id}" (nom: ${t.name})`).join("\n"),
+                                            cfg,
+                                        );
+                                        return;
+                                    }
+                                    // Corriger silencieusement et continuer avec le bon ID
+                                    parsedTool.terminal_id = match.id;
+                                } catch {
+                                    await sendPrompt(
+                                        `[Erreur terminal_start_interactive] "${tid}" n'est pas un ID valide (doit commencer par "term-").\n` +
+                                            `Utilise create_terminal pour créer un terminal et récupère son ID.`,
+                                        cfg,
+                                    );
+                                    return;
+                                }
+                            }
+                            const realTid = String(parsedTool.terminal_id);
+                            // Réinitialiser le curseur de lecture pour cette nouvelle session
+                            terminalReadCursors.delete(realTid);
+                            try {
+                                await invokeWithTimeout<void>(
+                                    "terminal_start_interactive",
+                                    { terminalId: realTid, command: String(parsedTool.terminal_start_interactive) },
+                                    8000,
+                                );
+                                await sendPrompt(
+                                    `[Processus interactif démarré dans le terminal "${realTid}"]\n` +
+                                        `Commande : ${parsedTool.terminal_start_interactive}\n` +
+                                        `⏳ L'utilisateur entre son mot de passe directement dans le terminal xterm.js.\n` +
+                                        `✅ Dès que l'utilisateur confirme être connecté (ou que tu vois un prompt distant), envoie les commandes avec terminal_send_stdin.\n` +
+                                        `   La sortie de chaque commande te sera AUTOMATIQUEMENT retournée après ~2.5 s.\n` +
+                                        `   Exemple : <tool>{"terminal_send_stdin": "ls -la\\n", "terminal_id": "${realTid}"}</tool>\n` +
+                                        `⚠️ Ne pas envoyer de commandes AVANT que l'utilisateur soit connecté (mot de passe saisi).`,
+                                    cfg,
+                                );
+                            } catch (err) {
+                                lastToolWasErrorRef.current = true;
+                                await sendPrompt(`[Erreur terminal_start_interactive "${realTid}"]: ${err}`, cfg);
+                            }
+                            return;
+                        }
+
+                        // ── terminal_send_stdin ───────────────────────────────
+                        if (parsedTool.terminal_send_stdin !== undefined) {
+                            onOpenTerminal?.();
+                            const tid = String(parsedTool.terminal_id ?? "");
+                            if (!tid) {
+                                await sendPrompt(
+                                    "[Erreur terminal_send_stdin] Paramètre terminal_id manquant.\n" +
+                                        "Utilise list_terminals pour obtenir l'ID du terminal actif.",
+                                    cfg,
+                                );
+                                return;
+                            }
+                            const input = String(parsedTool.terminal_send_stdin);
+
+                            // Lire la taille du buffer AVANT d'envoyer la commande
+                            let cursorBefore = terminalReadCursors.get(tid) ?? 0;
+                            try {
+                                const histBefore = await invokeWithTimeout<{ output: string }[]>(
+                                    "get_terminal_history",
+                                    { terminalId: tid },
+                                    5000,
+                                );
+                                const liveBefore = histBefore[histBefore.length - 1]?.output ?? "";
+                                // Supprimer les ANSI pour calculer la longueur texte réelle
+                                cursorBefore = stripAnsi(liveBefore).length;
+                            } catch {
+                                /* si ça échoue, on prend le curseur mémorisé */
+                            }
+
+                            try {
+                                // Envoyer la commande au PTY
+                                await invokeWithTimeout<void>("terminal_send_stdin", { terminalId: tid, input }, 5000);
+
+                                // Attendre la réponse (2.5 s max pour les commandes rapides)
+                                await new Promise((r) => setTimeout(r, 2500));
+
+                                // Lire la sortie accumulée depuis le curseur
+                                const histAfter = await invokeWithTimeout<{ command: string; output: string }[]>(
+                                    "get_terminal_history",
+                                    { terminalId: tid },
+                                    5000,
+                                );
+                                const rawOutput = histAfter[histAfter.length - 1]?.output ?? "";
+                                const cleanOutput = stripAnsi(rawOutput);
+                                const newOutput = cleanOutput.slice(cursorBefore).trimStart();
+
+                                // Mettre à jour le curseur pour la prochaine commande
+                                terminalReadCursors.set(tid, cleanOutput.length);
+
+                                const snippet =
+                                    newOutput.length > 6000
+                                        ? newOutput.slice(0, 6000) + `\n…[tronqué — ${newOutput.length} chars au total]`
+                                        : newOutput;
+
+                                if (snippet.trim()) {
+                                    await sendPrompt(
+                                        `[Sortie du terminal "${tid}" — commande: ${JSON.stringify(input.trim())}]\n` +
+                                            `\`\`\`\n${snippet}\n\`\`\``,
+                                        cfg,
+                                    );
+                                } else {
+                                    await sendPrompt(
+                                        `[Terminal "${tid}"] Commande envoyée (${JSON.stringify(input.trim())}), aucune sortie reçue en 2.5 s.\n` +
+                                            `La commande est peut-être encore en cours — tu peux réenvoyer terminal_send_stdin avec une commande vide ("\\n") pour rafraîchir.`,
+                                        cfg,
+                                    );
+                                }
+                            } catch (err) {
+                                lastToolWasErrorRef.current = true;
+                                await sendPrompt(`[Erreur terminal_send_stdin "${tid}"]: ${err}`, cfg);
                             }
                             return;
                         }

@@ -8,7 +8,7 @@ use tauri::{command, AppHandle};
 #[derive(Serialize, Clone, Debug)]
 pub struct HardwareInfo {
     pub total_ram_gb: f64,
-    pub cpu_threads: usize,  // threads logiques disponibles
+    pub cpu_threads: usize, // threads logiques disponibles
     pub gpu_name: String,
     pub gpu_vram_gb: f64,
     pub has_dedicated_gpu: bool,
@@ -22,7 +22,10 @@ fn detect_gpu() -> (String, f64, bool) {
 
     // ── 1. nvidia-smi (VRAM réelle, sans la limite uint32 de wmic ~4 Go) ─────
     let nsmi = Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .output();
 
@@ -149,9 +152,12 @@ pub fn get_hardware_info() -> Result<HardwareInfo, String> {
 
 /// Exécute une commande shell (PowerShell sur Windows, sh sur Linux/macOS).
 /// Retourne stdout, ou stderr si stdout est vide.
+/// Les commandes interactives (ssh, telnet…) sont bloquées — utilise terminal_start_interactive.
 #[command]
 pub fn run_shell_command(command: String) -> Result<String, String> {
-    use std::process::Command;
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
 
     if command.trim().is_empty() {
         return Err("Commande vide".into());
@@ -160,29 +166,91 @@ pub fn run_shell_command(command: String) -> Result<String, String> {
         return Err("Commande trop longue (max 2000 chars)".into());
     }
 
+    // ── Bloquer les commandes interactives qui gèleraient l'application ──────
+    let first_word = command
+        .trim()
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    let bin = first_word.split(['/', '\\']).last().unwrap_or(&first_word);
+    match bin {
+        "ssh" | "telnet" | "ftp" | "sftp" => {
+            return Err(
+                "⚠️ Commande interactive détectée — utilise terminal_start_interactive.\n\
+                 Format : <tool>{\"terminal_start_interactive\": \"ssh user@host\", \"terminal_id\": \"<id>\"}</tool>\n\
+                 Crée d'abord un terminal avec create_terminal si tu n'en as pas.\n\
+                 L'utilisateur verra la sortie en temps réel et pourra saisir son mot de passe."
+                    .into(),
+            );
+        }
+        "vim" | "vi" | "nano" | "emacs" | "less" | "more" | "top" | "htop" | "btop" => {
+            return Err(
+                "❌ Commande interactive non supportée dans cmd. \
+                 Utilise l'outil 'files' (write_file/read_file) ou Get-Process pour les moniteurs."
+                    .into(),
+            );
+        }
+        _ => {}
+    }
+
+    // ── Spawn avec timeout 60 s ───────────────────────────────────────────────
     #[cfg(target_os = "windows")]
-    let output = {
+    let mut child = {
         use std::os::windows::process::CommandExt;
         Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", command.trim()])
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| e.to_string())?
     };
 
     #[cfg(not(target_os = "windows"))]
-    let output = Command::new("sh")
+    let mut child = Command::new("sh")
         .args(["-c", command.trim()])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| e.to_string())?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let timeout = Duration::from_secs(60);
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                return Err(
+                    "[Timeout 60s] La commande n'a pas répondu. \
+                     Si c'est une commande interactive (ssh, repl…) utilise terminal_start_interactive."
+                        .into(),
+                );
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_string(&mut stdout);
+    }
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_string(&mut stderr);
+    }
+    let stdout = stdout.trim().to_string();
+    let stderr = stderr.trim().to_string();
 
     if !stdout.is_empty() {
-        // Tronquer si trop long (évite de saturer le contexte)
         if stdout.len() > 4000 {
-            Ok(format!("{}...\n[tronqué, {} chars au total]", &stdout[..4000], stdout.len()))
+            Ok(format!(
+                "{}...\n[tronqué, {} chars au total]",
+                &stdout[..4000],
+                stdout.len()
+            ))
         } else {
             Ok(stdout)
         }
@@ -229,7 +297,11 @@ pub fn write_file(path: String, content: String) -> Result<String, String> {
         }
     }
     std::fs::write(p, content.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(format!("Fichier écrit : {} ({} octets)", path, content.len()))
+    Ok(format!(
+        "Fichier écrit : {} ({} octets)",
+        path,
+        content.len()
+    ))
 }
 
 /// Applique un Search & Replace exact dans un fichier existant.
@@ -262,7 +334,11 @@ pub fn patch_file(path: String, search: String, replace: String) -> Result<Strin
     }
     let patched = content.replacen(search.as_str(), replace.as_str(), 1);
     std::fs::write(p, patched.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(format!("Fichier patché : {} ({} octets)", path, patched.len()))
+    Ok(format!(
+        "Fichier patché : {} ({} octets)",
+        path,
+        patched.len()
+    ))
 }
 
 /// Sauvegarde une image encodée en base64 (data URL) sur le disque.
@@ -287,7 +363,13 @@ pub fn save_image(
         return Err("Le data_url doit commencer par 'data:'".into());
     };
 
-    let ext = mime.split('/').nth(1).unwrap_or("png").split('+').next().unwrap_or("png");
+    let ext = mime
+        .split('/')
+        .nth(1)
+        .unwrap_or("png")
+        .split('+')
+        .next()
+        .unwrap_or("png");
     let fname = filename.unwrap_or_else(|| {
         format!(
             "image_{}.{}",

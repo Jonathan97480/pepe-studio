@@ -17,6 +17,8 @@
     "@tailwindcss/typography": "^0.5.19",
     "@tauri-apps/api": "^1.5.0",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "katex": "^0.16.45",
     "lucide-react": "^0.517.0",
     "next": "^14.2.35",
