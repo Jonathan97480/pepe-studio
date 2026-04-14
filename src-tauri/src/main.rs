@@ -29,8 +29,8 @@ use dev_server::{
 };
 use http_client::http_request;
 use hw_info::{
-    download_image, get_hardware_info, patch_file, read_file_content, run_shell_command,
-    save_image, write_file,
+    batch_rename_files, download_image, get_hardware_info, list_folder_pdfs, patch_file,
+    read_file_content, read_pdf_batch, read_pdf_bytes, run_shell_command, save_image, write_file,
 };
 use llama_sidecar::{cleanup_llama, send_llama_prompt, start_llama, stop_llama, LlamaState};
 use mcp::{
@@ -91,6 +91,10 @@ fn main() {
             write_file,
             patch_file,
             read_file_content,
+            read_pdf_bytes,
+            list_folder_pdfs,
+            batch_rename_files,
+            read_pdf_batch,
             save_image,
             download_image,
             http_request,

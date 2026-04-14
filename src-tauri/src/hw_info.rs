@@ -341,6 +341,197 @@ pub fn patch_file(path: String, search: String, replace: String) -> Result<Strin
     ))
 }
 
+/// Lit un fichier PDF et retourne ses octets encodés en base64.
+/// Permet au frontend (pdfjs) d'extraire le texte côté JS.
+#[command]
+pub fn read_pdf_bytes(path: String) -> Result<String, String> {
+    use base64::Engine;
+    if path.trim().is_empty() {
+        return Err("Chemin vide".into());
+    }
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Fichier introuvable : {}", path));
+    }
+    let lower = path.to_lowercase();
+    if !lower.ends_with(".pdf") {
+        return Err("Le fichier doit être un PDF (.pdf)".into());
+    }
+    let metadata = std::fs::metadata(p).map_err(|e| e.to_string())?;
+    // Limite 50 Mo pour les PDFs
+    if metadata.len() > 50 * 1024 * 1024 {
+        return Err(format!(
+            "PDF trop volumineux ({} Mo) — limite 50 Mo",
+            metadata.len() / 1_048_576
+        ));
+    }
+    let bytes = std::fs::read(p).map_err(|e| format!("Erreur lecture : {}", e))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+/// Liste tous les fichiers PDF dans un dossier (non-récursif par défaut).
+/// Si `recursive` est true, parcourt les sous-dossiers également.
+#[command]
+pub fn list_folder_pdfs(folder: String, recursive: Option<bool>) -> Result<Vec<String>, String> {
+    if folder.trim().is_empty() {
+        return Err("Chemin de dossier vide".into());
+    }
+    let p = std::path::Path::new(&folder);
+    if !p.exists() {
+        return Err(format!("Dossier introuvable : {}", folder));
+    }
+    if !p.is_dir() {
+        return Err(format!("Ce chemin n'est pas un dossier : {}", folder));
+    }
+    let deep = recursive.unwrap_or(false);
+    let mut results: Vec<String> = Vec::new();
+    collect_pdfs(p, deep, &mut results)?;
+    results.sort();
+    Ok(results)
+}
+
+fn collect_pdfs(
+    dir: &std::path::Path,
+    recursive: bool,
+    out: &mut Vec<String>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && recursive {
+            collect_pdfs(&path, true, out)?;
+        } else if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if ext.to_string_lossy().to_lowercase() == "pdf" {
+                    out.push(path.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ─── Lecture batch de PDFs (base64) ──────────────────────────────────────────
+
+#[derive(Serialize, Clone, Debug)]
+pub struct PdfBatchItem {
+    pub path: String,
+    pub base64: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Lit une liste de fichiers PDF et retourne leurs octets encodés en base64.
+/// Les fichiers sont lus en parallèle (threads Rayon non disponibles en Tauri basique,
+/// donc séquentiel mais regroupé en un seul aller-retour IPC).
+#[command]
+pub fn read_pdf_batch(paths: Vec<String>) -> Vec<PdfBatchItem> {
+    use base64::Engine;
+    paths
+        .into_iter()
+        .map(|path| {
+            let p = std::path::Path::new(&path);
+            if !p.exists() {
+                return PdfBatchItem {
+                    path,
+                    base64: None,
+                    error: Some("Fichier introuvable".to_string()),
+                };
+            }
+            let lower = path.to_lowercase();
+            if !lower.ends_with(".pdf") {
+                return PdfBatchItem {
+                    path,
+                    base64: None,
+                    error: Some("Ce n'est pas un fichier PDF".to_string()),
+                };
+            }
+            match std::fs::metadata(p) {
+                Ok(m) if m.len() > 50 * 1024 * 1024 => PdfBatchItem {
+                    path,
+                    base64: None,
+                    error: Some(format!("PDF trop volumineux ({} Mo)", m.len() / 1_048_576)),
+                },
+                Ok(_) => match std::fs::read(p) {
+                    Ok(bytes) => PdfBatchItem {
+                        path,
+                        base64: Some(base64::engine::general_purpose::STANDARD.encode(&bytes)),
+                        error: None,
+                    },
+                    Err(e) => PdfBatchItem {
+                        path,
+                        base64: None,
+                        error: Some(e.to_string()),
+                    },
+                },
+                Err(e) => PdfBatchItem {
+                    path,
+                    base64: None,
+                    error: Some(e.to_string()),
+                },
+            }
+        })
+        .collect()
+}
+
+// ─── Renommage en lot ─────────────────────────────────────────────────────────
+
+use serde::Deserialize;
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BatchRenameItem {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct BatchRenameResult {
+    pub from: String,
+    pub to: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+/// Renomme plusieurs fichiers en une seule opération.
+/// `to` peut être un nom de fichier simple (même dossier que `from`) ou un chemin absolu.
+#[command]
+pub fn batch_rename_files(renames: Vec<BatchRenameItem>) -> Vec<BatchRenameResult> {
+    renames
+        .into_iter()
+        .map(|item| {
+            let from_path = std::path::Path::new(&item.from);
+            if !from_path.exists() {
+                return BatchRenameResult {
+                    from: item.from,
+                    to: item.to,
+                    success: false,
+                    error: Some("Fichier source introuvable".to_string()),
+                };
+            }
+            let to_path = std::path::Path::new(&item.to);
+            let dest = if to_path.is_absolute() || item.to.contains('/') || item.to.contains('\\') {
+                to_path.to_path_buf()
+            } else {
+                let parent = from_path.parent().unwrap_or(std::path::Path::new("."));
+                parent.join(&item.to)
+            };
+            match std::fs::rename(&item.from, &dest) {
+                Ok(_) => BatchRenameResult {
+                    from: item.from,
+                    to: dest.to_string_lossy().replace('\\', "/"),
+                    success: true,
+                    error: None,
+                },
+                Err(e) => BatchRenameResult {
+                    from: item.from,
+                    to: item.to,
+                    success: false,
+                    error: Some(e.to_string()),
+                },
+            }
+        })
+        .collect()
+}
+
 /// Sauvegarde une image encodée en base64 (data URL) sur le disque.
 /// Retourne le chemin absolu, le dataUrl et le nom du fichier.
 #[command]

@@ -24,3 +24,32 @@ export async function extractPdfPages(file: File): Promise<PdfPage[]> {
     }
     return pages;
 }
+
+/**
+ * Extrait le texte d'un PDF à partir de son contenu encodé en base64.
+ * Utilisé par le tool read_pdf pour lire un PDF depuis le disque.
+ */
+export async function extractPdfPagesFromBase64(base64: string): Promise<PdfPage[]> {
+    const pdfjsLib = await import("pdfjs-dist");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+
+    const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+    const pages: PdfPage[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const text = content.items
+            .map((item: any) => ("str" in item ? item.str : ""))
+            .join(" ")
+            .replace(/  +/g, " ")
+            .trim();
+        if (text) pages.push({ pageNum: i, text });
+    }
+    return pages;
+}

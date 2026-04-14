@@ -4,6 +4,7 @@ import { open as shellOpen } from "@tauri-apps/api/shell";
 import { searchLibrary, queryDocs } from "../tools/Context7Client";
 import { hasPatchBlocks, applyAllPatches, type PatchResult } from "../lib/skillPatcher";
 import { normalizeToolTags, sanitizeLlmJson, extractWriteFileTool, invokeWithTimeout } from "../lib/chatUtils";
+import { extractPdfPagesFromBase64 } from "../lib/pdfExtract";
 import type { LlamaMessage, Attachment } from "./useLlama";
 import type { LlamaLaunchConfig } from "../lib/llamaWrapper";
 import type { TurboQuantType } from "../context/ModelSettingsContext";
@@ -33,10 +34,15 @@ Usage : <tool>{"cmd": "Get-Date"}</tool>
 • Exécute une commande dans un processus isolé (le cwd ne persiste PAS).
 • Enchaîne plusieurs commandes avec ; (JAMAIS &&).
 • Utilise des chemins absolus ou Set-Location ; avant ta commande.
+⛔ RÈGLE JSON ABSOLUE : utilise TOUJOURS des guillemets SIMPLES (') pour les chemins et chaînes dans la valeur cmd.
+   Les guillemets doubles (\") à l'intérieur du JSON brisent le parseur — erreur garantie.
+   ✗ JAMAIS  : {"cmd": "Rename-Item -Path \\"E:/Mon Dossier/f.pdf\\" -NewName \\"n.pdf\\""}
+   ✓ CORRECT : {"cmd": "Rename-Item -Path 'E:/Mon Dossier/f.pdf' -NewName 'n.pdf'"}
 Exemples :
   <tool>{"cmd": "node --version"}</tool>
-  <tool>{"cmd": "New-Item -ItemType Directory -Force \\"E:/projet\\"; Set-Location \\"E:/projet\\"; git init"}</tool>
-  <tool>{"cmd": "Get-ChildItem -Recurse -Name E:/mon-projet"}</tool>
+  <tool>{"cmd": "New-Item -ItemType Directory -Force 'E:/projet'; Set-Location 'E:/projet'; git init"}</tool>
+  <tool>{"cmd": "Get-ChildItem -Recurse -Name 'E:/mon-projet'"}</tool>
+  <tool>{"cmd": "Rename-Item -Path 'E:/Mon Dossier/ancien.pdf' -NewName 'nouveau.pdf'"}</tool>
 Quand utiliser cmd (et non terminal persistant) :
   ✅ Commande unique sans besoin de rester dans le même dossier
   ✅ Info système, lecture chemin absolu, action ponctuelle
@@ -84,7 +90,46 @@ Usage : <tool>{"read_file": "E:/projet/index.html"}</tool>
 • Retourne le contenu complet du fichier dans le contexte.
 • Chemin absolu recommandé.
 • Limite : 512 Ko.
+• ⚠️ Ne fonctionne PAS pour les PDF (binaire) → utilise read_pdf à la place.
 Toujours lire un fichier avant de le modifier (RÈGLE 0).`,
+
+    read_pdf: `=== read_pdf — Lire un fichier PDF complet (toutes les pages) ===
+Usage : <tool>{"read_pdf": "E:/documents/rapport.pdf"}</tool>
+• Retourne le texte de TOUTES les pages — utile pour analyse détaillée ou résumé d'un seul document.
+• ⚠️ Retourne beaucoup de contexte — réservé à l'analyse approfondie d'UN seul PDF.
+• Pour traiter plusieurs PDFs → utilise read_pdf_batch.`,
+
+    read_pdf_brief: `=== read_pdf_brief — Lire la 1ère page d'un seul PDF ===
+Usage : <tool>{"read_pdf_brief": "E:/documents/facture.pdf"}</tool>
+• 1ère page uniquement, max 2000 caractères.
+• ⚠️ Pour traiter PLUSIEURS PDFs en une seule opération → utilise read_pdf_batch (plus efficace).`,
+
+    read_pdf_batch: `=== read_pdf_batch — Lire la 1ère page de PLUSIEURS PDFs en un seul appel ===
+Usage : <tool>{"read_pdf_batch": "[\\"E:/Test IA PDF/fichier1.pdf\\", \\"E:/Test IA PDF/fichier2.pdf\\", ...]"}</tool>
+• ✅ OUTIL PRINCIPAL pour tout traitement en lot de PDFs.
+• Retourne la 1ère page de chaque PDF (max 2000 caractères par fichier) en UN SEUL appel.
+• ⛔ INTERDIT d'appeler read_pdf_brief fichier par fichier quand on traite un lot — utilise read_pdf_batch.
+• Recommandation : envoyer 30 chemins max par appel pour éviter les timeouts.
+Workflow batch PDF OBLIGATOIRE (≥ 2 fichiers à renommer/analyser) :
+  ÉTAPE 1 : list_folder_pdfs → liste complète
+  ÉTAPE 2 : read_pdf_batch sur les 30 premiers chemins → extraire émetteur + numéro de chaque
+  ÉTAPE 3 : Si > 30 fichiers, read_pdf_batch sur le lot suivant, etc.
+  ÉTAPE FINALE : batch_rename avec toutes les entrées [{from, to}] en un seul appel`,
+
+    list_folder_pdfs: `=== list_folder_pdfs — Lister les PDFs d'un dossier ===
+Usage : <tool>{"list_folder_pdfs": "E:/documents"}</tool>
+Usage récursif : <tool>{"list_folder_pdfs": "E:/documents", "recursive": "true"}</tool>
+• Liste tous les fichiers .pdf dans le dossier indiqué.
+• Puis utilise read_pdf_batch pour lire les métadonnées de tous les fichiers.`,
+
+    batch_rename: `=== batch_rename — Renommer plusieurs fichiers en une seule opération ===
+Usage : <tool>{"batch_rename": [{"from": "E:/dossier/ancien.pdf", "to": "nouveau.pdf"}, ...]}</tool>
+• Format TABLEAU NATIF JSON — PAS de guillemets extra autour du tableau.
+• Renomme une liste de fichiers en un seul appel — parfait pour le traitement en lot.
+• "to" peut être un nom simple (reste dans le même dossier) ou un chemin absolu.
+• Retourne le détail de chaque renommage (succès/échec).
+• ⚠️ Maximum 15 fichiers par appel. Si > 15, fais 2 appels séparés.
+⛔ RÈGLE : ne jamais utiliser Rename-Item (cmd) quand on veut renommer plusieurs fichiers — utilise batch_rename.`,
 
     create_terminal: `=== create_terminal — Ouvrir un terminal persistant ===
 Usage : <tool>{"create_terminal": "nom-projet", "cwd": "E:/MesProjets/mon-projet"}</tool>
@@ -609,8 +654,26 @@ export function useToolCalling({
                         setToolRunning(true);
                         let errMsg: string;
                         const isWriteFile = toolMatch[1].includes('"write_file"');
+                        const isBatchRename = toolMatch[1].includes('"batch_rename"');
+                        const isReadPdfBatch = toolMatch[1].includes('"read_pdf_batch"');
                         if (jsonParseErrorCountRef.current <= 2) {
-                            if (isWriteFile) {
+                            if (isBatchRename) {
+                                errMsg =
+                                    `[Erreur batch_rename — JSON invalide ou trop long]\n` +
+                                    `Le JSON de ton batch_rename est mal formé (${parseError}).\n` +
+                                    `SOLUTION OBLIGATOIRE : Divise les renommages en 2 appels séparés de 15 fichiers max :\n` +
+                                    `Appel 1 → <tool>{"batch_rename": [{"from": "...", "to": "..."}, ...]}</tool>  ← 15 premiers\n` +
+                                    `Appel 2 → <tool>{"batch_rename": [{"from": "...", "to": "..."}, ...]}</tool>  ← 15 suivants\n` +
+                                    `⚠️ Format TABLEAU NATIF obligatoire — PAS de guillemets supplémentaires autour du tableau.\n` +
+                                    `⚠️ Aucun guillemet à échapper dans les chemins de fichiers.`;
+                            } else if (isReadPdfBatch) {
+                                errMsg =
+                                    `[Erreur read_pdf_batch — JSON invalide]\n` +
+                                    `Le JSON est mal formé (${parseError}).\n` +
+                                    `SOLUTION : Utilise un tableau natif JSON (PAS une chaîne sérialisée) :\n` +
+                                    `<tool>{"read_pdf_batch": ["E:/chemin/fichier1.pdf", "E:/chemin/fichier2.pdf", ...]}</tool>\n` +
+                                    `⚠️ Maximum 30 chemins par appel. Si > 30 fichiers, fais 2 appels séparés.`;
+                            } else if (isWriteFile) {
                                 errMsg =
                                     `[Erreur write_file — FORMAT TAG OBLIGATOIRE]\n` +
                                     `ARRÊTE toute tentative JSON pour write_file. Utilise EXACTEMENT ce format (commence par < pas par {) :\n` +
@@ -636,7 +699,17 @@ export function useToolCalling({
                             }
                         } else {
                             jsonParseErrorCountRef.current = 0;
-                            if (isWriteFile) {
+                            if (isBatchRename) {
+                                errMsg =
+                                    `[Erreur batch_rename persistante — SPLIT OBLIGATOIRE]\n` +
+                                    `Impossible de parser le JSON. RÈGLE : max 10 fichiers par appel batch_rename.\n` +
+                                    `Génère autant d'appels <tool>{"batch_rename": [...]}</tool> que nécessaire (10 par appel).`;
+                            } else if (isReadPdfBatch) {
+                                errMsg =
+                                    `[Erreur read_pdf_batch persistante — SPLIT OBLIGATOIRE]\n` +
+                                    `Impossible de parser le JSON. Réduis à 10 chemins maximum par appel.\n` +
+                                    `<tool>{"read_pdf_batch": ["chemin1.pdf", ..., "chemin10.pdf"]}</tool>`;
+                            } else if (isWriteFile) {
                                 errMsg =
                                     `[ECHEC REPEATED write_file — FALLBACK CMD OBLIGATOIRE]\n` +
                                     `Le format TAG n'a pas fonctionné. Ecris le fichier via PowerShell cmd à la place :\n` +
@@ -983,6 +1056,188 @@ export function useToolCalling({
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
                                 await sendPrompt(`[Erreur lecture fichier]: ${err}`, cfg);
+                            }
+                            return;
+                        }
+
+                        // ── list_folder_pdfs — liste les PDFs d'un dossier ────────
+                        if (parsedTool.list_folder_pdfs) {
+                            try {
+                                const recursive = parsedTool.recursive === "true";
+                                const files = await invokeWithTimeout<string[]>(
+                                    "list_folder_pdfs",
+                                    { folder: parsedTool.list_folder_pdfs, recursive },
+                                    15000,
+                                );
+                                if (files.length === 0) {
+                                    await sendPrompt(
+                                        `[list_folder_pdfs] Aucun fichier PDF trouvé dans : ${parsedTool.list_folder_pdfs}`,
+                                        cfg,
+                                    );
+                                } else {
+                                    await sendPrompt(
+                                        `[PDFs dans ${parsedTool.list_folder_pdfs}] ${files.length} fichier(s) :\n${files.map((f, i) => `  ${i + 1}. ${f}`).join("\n")}`,
+                                        cfg,
+                                    );
+                                }
+                            } catch (err) {
+                                lastToolWasErrorRef.current = true;
+                                await sendPrompt(`[Erreur list_folder_pdfs]: ${err}`, cfg);
+                            }
+                            return;
+                        }
+
+                        // ── read_pdf — lit et extrait le texte d'un PDF sur disque ──
+                        if (parsedTool.read_pdf) {
+                            try {
+                                const base64 = await invokeWithTimeout<string>(
+                                    "read_pdf_bytes",
+                                    { path: parsedTool.read_pdf },
+                                    30000,
+                                );
+                                const pages = await extractPdfPagesFromBase64(base64);
+                                if (pages.length === 0) {
+                                    await sendPrompt(
+                                        `[read_pdf] Le PDF "${parsedTool.read_pdf}" ne contient aucun texte extractible (PDF image ou protégé).`,
+                                        cfg,
+                                    );
+                                } else {
+                                    const text = pages.map((p) => `[Page ${p.pageNum}]\n${p.text}`).join("\n\n");
+                                    await sendPrompt(
+                                        `[Contenu PDF : ${parsedTool.read_pdf}] (${pages.length} page(s))\n\n${text}`,
+                                        cfg,
+                                    );
+                                }
+                            } catch (err) {
+                                lastToolWasErrorRef.current = true;
+                                await sendPrompt(`[Erreur read_pdf]: ${err}`, cfg);
+                            }
+                            return;
+                        }
+
+                        // ── read_pdf_brief — 1ère page uniquement, max 2000 car ────
+                        if (parsedTool.read_pdf_brief) {
+                            try {
+                                const base64 = await invokeWithTimeout<string>(
+                                    "read_pdf_bytes",
+                                    { path: parsedTool.read_pdf_brief },
+                                    30000,
+                                );
+                                const pages = await extractPdfPagesFromBase64(base64);
+                                if (pages.length === 0) {
+                                    await sendPrompt(
+                                        `[read_pdf_brief] ${parsedTool.read_pdf_brief} : aucun texte extractible.`,
+                                        cfg,
+                                    );
+                                } else {
+                                    const text = pages[0].text.slice(0, 2000);
+                                    await sendPrompt(`[PDF page 1 : ${parsedTool.read_pdf_brief}]\n${text}`, cfg);
+                                }
+                            } catch (err) {
+                                lastToolWasErrorRef.current = true;
+                                await sendPrompt(`[Erreur read_pdf_brief]: ${err}`, cfg);
+                            }
+                            return;
+                        }
+
+                        // ── read_pdf_batch — lit N PDFs (1ère page) en un seul appel IPC ──
+                        if (parsedTool.read_pdf_batch) {
+                            try {
+                                let paths: string[];
+                                if (Array.isArray(parsedTool.read_pdf_batch)) {
+                                    // L'IA a généré un tableau natif JSON
+                                    paths = parsedTool.read_pdf_batch as string[];
+                                } else {
+                                    try {
+                                        paths = JSON.parse(parsedTool.read_pdf_batch);
+                                    } catch {
+                                        lastToolWasErrorRef.current = true;
+                                        await sendPrompt(
+                                            `[Erreur read_pdf_batch] JSON invalide. Format attendu : ["chemin1.pdf", "chemin2.pdf", ...]\nLes guillemets internes doivent être échappés avec \\\\.`,
+                                            cfg,
+                                        );
+                                        return;
+                                    }
+                                }
+                                type PdfBatchItem = {
+                                    path: string;
+                                    base64: string | null;
+                                    error: string | null;
+                                };
+                                const items = await invokeWithTimeout<PdfBatchItem[]>(
+                                    "read_pdf_batch",
+                                    { paths },
+                                    60000,
+                                );
+                                const parts: string[] = [];
+                                for (const item of items) {
+                                    const name = item.path.split(/[\\/]/).pop() ?? item.path;
+                                    if (item.error || !item.base64) {
+                                        parts.push(`[${name}] Erreur: ${item.error ?? "base64 vide"}`);
+                                        continue;
+                                    }
+                                    try {
+                                        const pages = await extractPdfPagesFromBase64(item.base64);
+                                        const text = pages.length > 0 ? pages[0].text.slice(0, 2000) : "(aucun texte)";
+                                        parts.push(`[PDF: ${name}]\n${text}`);
+                                    } catch (e) {
+                                        parts.push(`[${name}] Erreur extraction: ${e}`);
+                                    }
+                                }
+                                await sendPrompt(
+                                    `[read_pdf_batch] ${items.length} fichier(s) analysés :\n\n${parts.join("\n\n---\n\n")}`,
+                                    cfg,
+                                );
+                            } catch (err) {
+                                lastToolWasErrorRef.current = true;
+                                await sendPrompt(`[Erreur read_pdf_batch]: ${err}`, cfg);
+                            }
+                            return;
+                        }
+
+                        // ── batch_rename — renommer plusieurs fichiers en un appel ──
+                        if (parsedTool.batch_rename) {
+                            try {
+                                let entries: Array<{ from: string; to: string }>;
+                                if (Array.isArray(parsedTool.batch_rename)) {
+                                    // L'IA a généré un tableau natif JSON
+                                    entries = parsedTool.batch_rename as Array<{ from: string; to: string }>;
+                                } else {
+                                    try {
+                                        entries = JSON.parse(parsedTool.batch_rename);
+                                    } catch {
+                                        lastToolWasErrorRef.current = true;
+                                        await sendPrompt(
+                                            `[Erreur batch_rename] JSON invalide. Format attendu : [{"from": "chemin/ancien.pdf", "to": "nouveau.pdf"}, ...]\nLes guillemets internes doivent être échappés avec \\\\.`,
+                                            cfg,
+                                        );
+                                        return;
+                                    }
+                                }
+                                type RenameResult = {
+                                    from: string;
+                                    to: string;
+                                    success: boolean;
+                                    error: string | null;
+                                };
+                                const results = await invokeWithTimeout<RenameResult[]>(
+                                    "batch_rename_files",
+                                    { renames: entries },
+                                    30000,
+                                );
+                                const successCount = results.filter((r) => r.success).length;
+                                const lines = results.map((r) =>
+                                    r.success
+                                        ? `  ✓ ${r.from.split("/").pop()} → ${r.to.split("/").pop()}`
+                                        : `  ✗ ${r.from.split("/").pop()} : ${r.error}`,
+                                );
+                                await sendPrompt(
+                                    `[batch_rename] ${successCount}/${results.length} fichiers renommés avec succès.\n${lines.join("\n")}`,
+                                    cfg,
+                                );
+                            } catch (err) {
+                                lastToolWasErrorRef.current = true;
+                                await sendPrompt(`[Erreur batch_rename]: ${err}`, cfg);
                             }
                             return;
                         }
