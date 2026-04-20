@@ -1,7 +1,5 @@
 import React, { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { open as shellOpen } from "@tauri-apps/api/shell";
-import { searchLibrary, queryDocs } from "../tools/Context7Client";
 import { hasPatchBlocks, applyAllPatches, type PatchResult } from "../lib/skillPatcher";
 import { normalizeToolTags, sanitizeLlmJson, extractWriteFileTool, invokeWithTimeout } from "../lib/chatUtils";
 import { describeTool, isActionTool, resolveToolDoc } from "../lib/toolDispatchUtils";
@@ -13,6 +11,47 @@ import {
     handleReadPdfBatch,
     handleReadPdfBrief,
 } from "../lib/toolFileHandlers";
+import {
+    handleCreateSkill,
+    handlePatchSkill,
+    handleReadSkill,
+    handleRunSkill,
+} from "../lib/toolSkillHandlers";
+import {
+    handleCloseTerminal,
+    handleCreateTerminal,
+    handleTerminalExec,
+    handleTerminalSendStdin,
+    handleTerminalStartInteractive,
+} from "../lib/toolTerminalHandlers";
+import {
+    collectRemainingWriteFiles,
+    handlePatchFileJson,
+    handleRunCommand,
+    handleSaveFact,
+    handleSavePlan,
+    handleSearchConversation,
+    handleUnknownTool,
+    handleWriteFile,
+    runWriteFileBatch,
+} from "../lib/toolCoreHandlers";
+import {
+    handleCallMcpTool,
+    handleContext7Docs,
+    handleContext7Search,
+    handleCreateMcpServer,
+    handleDownloadImage,
+    handleGetBrowserErrors,
+    handleHttpRequest,
+    handleListMcpServers,
+    handleOpenBrowser,
+    handleSaveImage,
+    handleScrapeUrl,
+    handleSearchWeb,
+    handleStartDevServer,
+    handleStartMcpServer,
+    handleStopDevServer,
+} from "../lib/toolWebHandlers";
 import {
     handleCheckTodo,
     handleGetDevServerInfo,
@@ -28,20 +67,6 @@ import type { LlamaLaunchConfig } from "../lib/llamaWrapper";
 import type { TurboQuantType } from "../context/ModelSettingsContext";
 import type { ChatMode } from "../lib/chatUtils";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
-
-// Curseurs de lecture par terminal_id ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pour ne retourner que le NOUVEAU texte aprÃƒÆ’Ã‚Â¨s terminal_send_stdin
-const terminalReadCursors: Map<string, number> = new Map();
-
-/** Supprime les sÃƒÆ’Ã‚Â©quences d'ÃƒÆ’Ã‚Â©chappement ANSI/VT pour ne passer que du texte brut au LLM. */
-function stripAnsi(s: string): string {
-    return s
-        .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "") // CSI sequences: ESC [ ... letter
-        .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "") // OSC sequences
-        .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, "") // DCS/SOS/PM/APC
-        .replace(/\x1b[=>]/g, "") // VT52 mode switches
-        .replace(/\r/g, "") // carriage returns
-        .replace(/\x1b\[\d*[ABCDK]/g, ""); // cursor movement leftovers
-}
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 // Documentation intÃƒÆ’Ã‚Â©grÃƒÆ’Ã‚Â©e de chaque outil ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â utilisÃƒÆ’Ã‚Â©e par get_tool_doc
@@ -625,950 +650,290 @@ export function useToolCalling({
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ create_skill ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.create_skill) {
-                            try {
-                                const result = await invokeWithTimeout<string>(
-                                    "create_skill",
-                                    {
-                                        name: parsedTool.create_skill,
-                                        description: parsedTool.description ?? "",
-                                        content: parsedTool.content ?? "",
-                                        skillType: parsedTool.skill_type ?? null,
-                                        method: parsedTool.method ?? null,
-                                        url: parsedTool.url ?? null,
-                                        headersTemplate: parsedTool.headers ?? null,
-                                        defaultBody: parsedTool.default_body ?? null,
-                                        baseUrl: parsedTool.base_url ?? null,
-                                        routes: parsedTool.routes ?? null,
-                                    },
-                                    20000,
-                                );
-                                await buildMachineContext();
-                                const skillTypeLabel =
-                                    parsedTool.skill_type === "http"
-                                        ? "HTTP"
-                                        : parsedTool.skill_type === "python"
-                                          ? "Python"
-                                          : parsedTool.skill_type === "nodejs"
-                                            ? "Node.js"
-                                            : parsedTool.skill_type === "composite"
-                                              ? "Composite"
-                                              : "PS1";
-                                await sendPrompt(
-                                    `[Skill ${skillTypeLabel} crÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â© avec succÃƒÆ’Ã‚Â¨s] "${parsedTool.create_skill}" est sauvegardÃƒÆ’Ã‚Â© et prÃƒÆ’Ã‚Âªt.\n${result}\n\n` +
-                                        `ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Tu peux maintenant :\n` +
-                                        `  - Le tester avec \`run_skill\`\n` +
-                                        `  - Ou rÃƒÆ’Ã‚Â©pondre ÃƒÆ’Ã‚Â  l'utilisateur que le skill est disponible\n` +
-                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â NE crÃƒÆ’Ã‚Â©e PAS ce skill ÃƒÆ’Ã‚Â  nouveau (il est dÃƒÆ’Ã‚Â©jÃƒÆ’Ã‚Â  sauvegardÃƒÆ’Ã‚Â© dans le fichier).`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur crÃƒÆ’Ã‚Â©ation skill]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleCreateSkill({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                buildMachineContext,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ run_skill ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.run_skill) {
-                            try {
-                                const output = await invokeWithTimeout<string>(
-                                    "run_skill",
-                                    { name: parsedTool.run_skill, args: parsedTool.args ?? null },
-                                    60000,
-                                );
-                                await sendPrompt(
-                                    `[RÃƒÆ’Ã‚Â©sultat du skill \`${parsedTool.run_skill}\`]\n\`\`\`\n${withAutoCritique(output, `run_skill:${parsedTool.run_skill}`)}\n\`\`\``,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(
-                                    `[Erreur d'exÃƒÆ’Ã‚Â©cution du skill \`${parsedTool.run_skill}\`]\n\`\`\`\n${err}\n\`\`\`\n\n` +
-                                        `Pour corriger le skill, utilise create_skill avec le mÃƒÆ’Ã‚Âªme nom et le contenu corrigÃƒÆ’Ã‚Â©.`,
-                                    cfg,
-                                );
-                            }
+                        if (
+                            await handleRunSkill({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                critiqueOutput: withAutoCritique,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ search_conversation ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.search_conversation !== undefined) {
-                            try {
-                                const results = await invokeWithTimeout<
-                                    { conversation_id: number; day_label: string; role: string; content: string }[]
-                                >("search_conversation_messages", { query: parsedTool.search_conversation }, 20000);
-                                if (results.length === 0) {
-                                    await sendPrompt(
-                                        `[MÃƒÆ’Ã‚Â©moire] Aucun message trouvÃƒÆ’Ã‚Â© pour : "${parsedTool.search_conversation}"`,
-                                        cfg,
-                                    );
-                                } else {
-                                    const groups = new Map<
-                                        number,
-                                        { day_label: string; msgs: { role: string; content: string }[] }
-                                    >();
-                                    for (const m of results) {
-                                        if (!groups.has(m.conversation_id))
-                                            groups.set(m.conversation_id, { day_label: m.day_label, msgs: [] });
-                                        groups.get(m.conversation_id)!.msgs.push({ role: m.role, content: m.content });
-                                    }
-                                    const parts: string[] = [];
-                                    for (const [id, g] of groups) {
-                                        parts.push(`\nÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Conv #${id} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${g.day_label} ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬`);
-                                        for (const msg of g.msgs) {
-                                            parts.push(`${msg.role === "user" ? "ÃƒÂ°Ã…Â¸Ã¢â‚¬ËœÃ‚Â¤" : "ÃƒÂ°Ã…Â¸Ã‚Â¤Ã¢â‚¬â€œ"} ${msg.content}`);
-                                        }
-                                    }
-                                    await sendPrompt(
-                                        `[MÃƒÆ’Ã‚Â©moire ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â "${parsedTool.search_conversation}"]${parts.join("\n")}`,
-                                        cfg,
-                                    );
-                                }
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur mÃƒÆ’Ã‚Â©moire]: ${err}`, cfg);
-                            }
+                        if (await handleSearchConversation({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ save_plan (checkpoint / mise ÃƒÆ’Ã‚Â  jour du plan) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.save_plan !== undefined) {
-                            try {
-                                const content = String(parsedTool.save_plan);
-                                if (conversationId) {
-                                    await invokeWithTimeout<string>(
-                                        "save_conversation_plan",
-                                        { conversationId, content },
-                                        5000,
-                                    );
-                                    setPlanContent(content);
-                                    await sendPrompt(`[PLAN.md] Plan sauvegardÃƒÆ’Ã‚Â© pour cette conversation.`, cfg);
-                                } else {
-                                    await sendPrompt(`[Erreur save_plan] Aucune conversation active.`, cfg);
-                                }
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur save_plan]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleSavePlan({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                conversationId,
+                                setPlanContent,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ create_terminal ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.create_terminal !== undefined) {
-                            onOpenTerminal?.();
-                            try {
-                                const info = await invokeWithTimeout<{ id: string; name: string; cwd: string }>(
-                                    "create_terminal",
-                                    { name: parsedTool.create_terminal || null, cwd: parsedTool.cwd ?? null },
-                                    10000,
-                                );
-                                await sendPrompt(
-                                    `[Terminal crÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â©]\n` +
-                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â ID RÃƒÆ’Ã¢â‚¬Â°EL (obligatoire pour toutes les commandes suivantes) : "${info.id}"\n` +
-                                        `Nom : "${info.name}" | RÃƒÆ’Ã‚Â©pertoire : ${info.cwd}\n` +
-                                        `\n` +
-                                        `Tu DOIS utiliser l'ID "${info.id}" (pas le nom) dans tous les appels suivants.\n` +
-                                        `Commandes disponibles :\n` +
-                                        `  ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ terminal_exec         ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ commandes ponctuelles non-interactives\n` +
-                                        `  ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ terminal_start_interactive ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ SSH, REPL et tout processus interactif\n` +
-                                        `Exemple SSH :\n` +
-                                        `  <tool>{"terminal_start_interactive": "ssh user@host", "terminal_id": "${info.id}"}</tool>`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur create_terminal]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleCreateTerminal({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                onOpenTerminal,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ terminal_exec ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.terminal_exec !== undefined) {
-                            onOpenTerminal?.();
-                            const tid = String(parsedTool.terminal_id ?? "");
-                            if (!tid) {
-                                await sendPrompt(
-                                    "[Erreur terminal_exec] ParamÃƒÆ’Ã‚Â¨tre terminal_id manquant. Utilise list_terminals pour voir les IDs disponibles.",
-                                    cfg,
-                                );
-                                return;
-                            }
-                            try {
-                                const _cmd = String(parsedTool.terminal_exec);
-                                const isLongRunning =
-                                    /^(npx\s+create-|yarn\s+create\s+|pnpm\s+create\s+|cargo\s+new\s+|dotnet\s+new\s+|ng\s+new\s+)/i.test(
-                                        _cmd.trim(),
-                                    );
-                                const execTimeout = isLongRunning ? 300000 : 60000;
-                                const result = await invokeWithTimeout<{
-                                    terminal_id: string;
-                                    output: string;
-                                    new_cwd: string;
-                                }>("terminal_exec", { terminalId: tid, command: _cmd }, execTimeout);
-                                const feedback = withAutoCritique(result.output, `terminal_exec:${tid}`);
-                                await sendPrompt(
-                                    `[Terminal "${tid}" | cwd: ${result.new_cwd}]\n\`\`\`\n${feedback}\n\`\`\``,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur terminal_exec "${tid}"]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleTerminalExec({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                onOpenTerminal,
+                                critiqueOutput: withAutoCritique,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ close_terminal ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.close_terminal !== undefined) {
-                            try {
-                                const result = await invokeWithTimeout<string>(
-                                    "close_terminal",
-                                    { terminalId: String(parsedTool.close_terminal) },
-                                    5000,
-                                );
-                                await sendPrompt(`[Terminal] ${result}`, cfg);
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur close_terminal]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleCloseTerminal({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                onOpenTerminal,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ terminal_start_interactive ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.terminal_start_interactive !== undefined) {
-                            onOpenTerminal?.();
-                            const tid = String(parsedTool.terminal_id ?? "");
-                            if (!tid) {
-                                await sendPrompt(
-                                    "[Erreur terminal_start_interactive] ParamÃƒÆ’Ã‚Â¨tre terminal_id manquant.\n" +
-                                        "Flux correct :\n" +
-                                        "  1. create_terminal pour obtenir un terminal_id (format: term-XXXXXXXXXX)\n" +
-                                        "  2. terminal_start_interactive avec cet ID EXACT (ex: term-1776174852395)",
-                                    cfg,
-                                );
-                                return;
-                            }
-                            // DÃƒÆ’Ã‚Â©tecter si l'IA a passÃƒÆ’Ã‚Â© un nom (sans "term-") au lieu d'un ID
-                            if (!tid.startsWith("term-")) {
-                                // Tenter de rÃƒÆ’Ã‚Â©soudre via list_terminals
-                                try {
-                                    const tlist = await invokeWithTimeout<{ id: string; name: string }[]>(
-                                        "list_terminals",
-                                        {},
-                                        5000,
-                                    );
-                                    const match = tlist.find((t) => t.name === tid || t.id === tid);
-                                    if (!match) {
-                                        await sendPrompt(
-                                            `[Erreur terminal_start_interactive] "${tid}" est un NOM, pas un ID.\n` +
-                                                `L'ID doit commencer par "term-" (ex: term-1776174852395).\n` +
-                                                `Terminaux disponibles :\n` +
-                                                tlist.map((t) => `  ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ "${t.id}" (nom: ${t.name})`).join("\n"),
-                                            cfg,
-                                        );
-                                        return;
-                                    }
-                                    // Corriger silencieusement et continuer avec le bon ID
-                                    parsedTool.terminal_id = match.id;
-                                } catch {
-                                    await sendPrompt(
-                                        `[Erreur terminal_start_interactive] "${tid}" n'est pas un ID valide (doit commencer par "term-").\n` +
-                                            `Utilise create_terminal pour crÃƒÆ’Ã‚Â©er un terminal et rÃƒÆ’Ã‚Â©cupÃƒÆ’Ã‚Â¨re son ID.`,
-                                        cfg,
-                                    );
-                                    return;
-                                }
-                            }
-                            const realTid = String(parsedTool.terminal_id);
-                            // RÃƒÆ’Ã‚Â©initialiser le curseur de lecture pour cette nouvelle session
-                            terminalReadCursors.delete(realTid);
-                            try {
-                                await invokeWithTimeout<void>(
-                                    "terminal_start_interactive",
-                                    { terminalId: realTid, command: String(parsedTool.terminal_start_interactive) },
-                                    8000,
-                                );
-                                await sendPrompt(
-                                    `[Processus interactif dÃƒÆ’Ã‚Â©marrÃƒÆ’Ã‚Â© dans le terminal "${realTid}"]\n` +
-                                        `Commande : ${parsedTool.terminal_start_interactive}\n` +
-                                        `ÃƒÂ¢Ã‚ÂÃ‚Â³ L'utilisateur entre son mot de passe directement dans le terminal xterm.js.\n` +
-                                        `ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ DÃƒÆ’Ã‚Â¨s que l'utilisateur confirme ÃƒÆ’Ã‚Âªtre connectÃƒÆ’Ã‚Â© (ou que tu vois un prompt distant), envoie les commandes avec terminal_send_stdin.\n` +
-                                        `   La sortie de chaque commande te sera AUTOMATIQUEMENT retournÃƒÆ’Ã‚Â©e aprÃƒÆ’Ã‚Â¨s ~2.5 s.\n` +
-                                        `   Exemple : <tool>{"terminal_send_stdin": "ls -la\\n", "terminal_id": "${realTid}"}</tool>\n` +
-                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Ne pas envoyer de commandes AVANT que l'utilisateur soit connectÃƒÆ’Ã‚Â© (mot de passe saisi).`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur terminal_start_interactive "${realTid}"]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleTerminalStartInteractive({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                onOpenTerminal,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ terminal_send_stdin ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.terminal_send_stdin !== undefined) {
-                            onOpenTerminal?.();
-                            const tid = String(parsedTool.terminal_id ?? "");
-                            if (!tid) {
-                                await sendPrompt(
-                                    "[Erreur terminal_send_stdin] ParamÃƒÆ’Ã‚Â¨tre terminal_id manquant.\n" +
-                                        "Utilise list_terminals pour obtenir l'ID du terminal actif.",
-                                    cfg,
-                                );
-                                return;
-                            }
-                            const input = String(parsedTool.terminal_send_stdin);
-
-                            // Lire la taille du buffer AVANT d'envoyer la commande
-                            let cursorBefore = terminalReadCursors.get(tid) ?? 0;
-                            try {
-                                const histBefore = await invokeWithTimeout<{ output: string }[]>(
-                                    "get_terminal_history",
-                                    { terminalId: tid },
-                                    5000,
-                                );
-                                const liveBefore = histBefore[histBefore.length - 1]?.output ?? "";
-                                // Supprimer les ANSI pour calculer la longueur texte rÃƒÆ’Ã‚Â©elle
-                                cursorBefore = stripAnsi(liveBefore).length;
-                            } catch {
-                                /* si ÃƒÆ’Ã‚Â§a ÃƒÆ’Ã‚Â©choue, on prend le curseur mÃƒÆ’Ã‚Â©morisÃƒÆ’Ã‚Â© */
-                            }
-
-                            try {
-                                // Envoyer la commande au PTY
-                                await invokeWithTimeout<void>("terminal_send_stdin", { terminalId: tid, input }, 5000);
-
-                                // Attendre la rÃƒÆ’Ã‚Â©ponse (2.5 s max pour les commandes rapides)
-                                await new Promise((r) => setTimeout(r, 2500));
-
-                                // Lire la sortie accumulÃƒÆ’Ã‚Â©e depuis le curseur
-                                const histAfter = await invokeWithTimeout<{ command: string; output: string }[]>(
-                                    "get_terminal_history",
-                                    { terminalId: tid },
-                                    5000,
-                                );
-                                const rawOutput = histAfter[histAfter.length - 1]?.output ?? "";
-                                const cleanOutput = stripAnsi(rawOutput);
-                                const newOutput = cleanOutput.slice(cursorBefore).trimStart();
-
-                                // Mettre ÃƒÆ’Ã‚Â  jour le curseur pour la prochaine commande
-                                terminalReadCursors.set(tid, cleanOutput.length);
-
-                                const snippet =
-                                    newOutput.length > 6000
-                                        ? newOutput.slice(0, 6000) + `\nÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦[tronquÃƒÆ’Ã‚Â© ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${newOutput.length} chars au total]`
-                                        : newOutput;
-
-                                if (snippet.trim()) {
-                                    await sendPrompt(
-                                        `[Sortie du terminal "${tid}" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â commande: ${JSON.stringify(input.trim())}]\n` +
-                                            `\`\`\`\n${snippet}\n\`\`\``,
-                                        cfg,
-                                    );
-                                } else {
-                                    await sendPrompt(
-                                        `[Terminal "${tid}"] Commande envoyÃƒÆ’Ã‚Â©e (${JSON.stringify(input.trim())}), aucune sortie reÃƒÆ’Ã‚Â§ue en 2.5 s.\n` +
-                                            `La commande est peut-ÃƒÆ’Ã‚Âªtre encore en cours ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â tu peux rÃƒÆ’Ã‚Â©envoyer terminal_send_stdin avec une commande vide ("\\n") pour rafraÃƒÆ’Ã‚Â®chir.`,
-                                        cfg,
-                                    );
-                                }
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur terminal_send_stdin "${tid}"]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleTerminalSendStdin({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                onOpenTerminal,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ context7-search ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool["context7-search"] !== undefined) {
-                            try {
-                                const result = await searchLibrary(
-                                    String(parsedTool["context7-search"]),
-                                    parsedTool.query ?? "",
-                                );
-                                await sendPrompt(`[Context7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â BibliothÃƒÆ’Ã‚Â¨ques trouvÃƒÆ’Ã‚Â©es]\n${result}`, cfg);
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur context7-search]: ${err}`, cfg);
-                            }
+                        if (await handleContext7Search({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ context7-docs ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool["context7-docs"] !== undefined) {
-                            try {
-                                const result = await queryDocs(
-                                    String(parsedTool["context7-docs"]),
-                                    parsedTool.query ?? "",
-                                    Number(parsedTool.tokens ?? 4000),
-                                );
-                                await sendPrompt(`[Context7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Documentation]\n${result}`, cfg);
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur context7-docs]: ${err}`, cfg);
-                            }
+                        if (await handleContext7Docs({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ http_request ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.http_request) {
-                            try {
-                                const result = await invokeWithTimeout<string>(
-                                    "http_request",
-                                    {
-                                        method: parsedTool.http_request,
-                                        url: parsedTool.url ?? "",
-                                        headers: parsedTool.headers ?? null,
-                                        body: parsedTool.body ?? null,
-                                    },
-                                    30000,
-                                );
-                                await sendPrompt(
-                                    `[RÃƒÆ’Ã‚Â©ponse HTTP]\n\`\`\`\n${withAutoCritique(result, "http_request")}\n\`\`\``,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur HTTP]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleHttpRequest({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                critiqueOutput: withAutoCritique,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ create_mcp_server ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.create_mcp_server) {
-                            try {
-                                const result = await invokeWithTimeout<string>(
-                                    "create_mcp_server",
-                                    {
-                                        name: parsedTool.create_mcp_server,
-                                        description: parsedTool.description ?? "",
-                                        content: parsedTool.content ?? "",
-                                    },
-                                    20000,
-                                );
-                                await sendPrompt(
-                                    `[Serveur MCP crÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â©] "${parsedTool.create_mcp_server}" sauvegardÃƒÆ’Ã‚Â©.\n${result}\n\n` +
-                                        `DÃƒÆ’Ã‚Â©marre-le maintenant avec start_mcp_server pour voir ses outils.`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur crÃƒÆ’Ã‚Â©ation serveur MCP]: ${err}`, cfg);
-                            }
+                        if (await handleCreateMcpServer({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ start_mcp_server ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.start_mcp_server) {
-                            try {
-                                const tools = await invokeWithTimeout<{ name: string; description: string }[]>(
-                                    "start_mcp_server",
-                                    { name: parsedTool.start_mcp_server },
-                                    20000,
-                                );
-                                const toolList = tools.map((t) => `  - ${t.name}: ${t.description}`).join("\n");
-                                await sendPrompt(
-                                    `[Serveur MCP "${parsedTool.start_mcp_server}" dÃƒÆ’Ã‚Â©marrÃƒÆ’Ã‚Â©]\nOutils disponibles :\n${toolList || "  (aucun outil)"}`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur dÃƒÆ’Ã‚Â©marrage serveur MCP]: ${err}`, cfg);
-                            }
+                        if (await handleStartMcpServer({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ call_mcp_tool ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.call_mcp_tool) {
-                            try {
-                                const result = await invokeWithTimeout<string>(
-                                    "call_mcp_tool",
-                                    {
-                                        serverName: parsedTool.call_mcp_tool,
-                                        toolName: parsedTool.tool ?? "",
-                                        argsJson: parsedTool.args ?? null,
-                                    },
-                                    20000,
-                                );
-                                await sendPrompt(
-                                    `[RÃƒÆ’Ã‚Â©sultat MCP tool "${parsedTool.tool}"]\n${withAutoCritique(result, `mcp:${parsedTool.tool}`)}`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur appel outil MCP]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleCallMcpTool({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                critiqueOutput: withAutoCritique,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ list_mcp_servers ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.list_mcp_servers !== undefined) {
-                            try {
-                                const servers = await invokeWithTimeout<
-                                    { name: string; description: string; running: boolean; tools: { name: string }[] }[]
-                                >("list_mcp_servers", {}, 20000);
-                                if (servers.length === 0) {
-                                    await sendPrompt(
-                                        `[MCP] Aucun serveur MCP disponible. CrÃƒÆ’Ã‚Â©e-en un avec create_mcp_server.`,
-                                        cfg,
-                                    );
-                                } else {
-                                    const list = servers
-                                        .map(
-                                            (s) =>
-                                                `  - ${s.name} ${s.running ? "(en cours)" : "(arrÃƒÆ’Ã‚ÂªtÃƒÆ’Ã‚Â©)"}: ${s.description}\n    Outils: ${s.tools.map((t) => t.name).join(", ") || "dÃƒÆ’Ã‚Â©marrer pour voir"}`,
-                                        )
-                                        .join("\n");
-                                    await sendPrompt(`[Serveurs MCP disponibles]\n${list}`, cfg);
-                                }
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur liste MCP]: ${err}`, cfg);
-                            }
+                        if (await handleListMcpServers({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ read_skill ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.read_skill !== undefined) {
-                            try {
-                                const content = await invokeWithTimeout<string>(
-                                    "read_skill",
-                                    { name: String(parsedTool.read_skill) },
-                                    10000,
-                                );
-                                await sendPrompt(
-                                    `[Contenu du skill \`${parsedTool.read_skill}\`]\n\`\`\`\n${content}\n\`\`\`\n\nAnalyse ce contenu et applique les corrections nÃƒÆ’Ã‚Â©cessaires avec create_skill.`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur read_skill]: ${err}`, cfg);
-                            }
+                        if (await handleReadSkill({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ patch_skill ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.patch_skill !== undefined) {
-                            try {
-                                const msg = await invokeWithTimeout<string>(
-                                    "patch_skill",
-                                    {
-                                        name: String(parsedTool.patch_skill),
-                                        search: String(parsedTool.search ?? ""),
-                                        replace: String(parsedTool.replace ?? ""),
-                                    },
-                                    10000,
-                                );
-                                await sendPrompt(`[patch_skill OK] ${msg}`, cfg);
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur patch_skill]: ${err}`, cfg);
-                            }
+                        if (await handlePatchSkill({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ write_file ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.write_file) {
-                            try {
-                                const rawContent = parsedTool.content ?? "";
-                                const content = rawContent
-                                    .replace(/\\n/g, "\n")
-                                    .replace(/\\t/g, "\t")
-                                    .replace(/\\r/g, "\r");
-                                const result = await invokeWithTimeout<string>(
-                                    "write_file",
-                                    { path: parsedTool.write_file, content },
-                                    20000,
-                                );
-                                await sendPrompt(
-                                    `[Fichier ÃƒÆ’Ã‚Â©crit] ${result}\n` +
-                                        `PROCHAINE ACTION OBLIGATOIRE : si d'autres fichiers restent ÃƒÆ’Ã‚Â  ÃƒÆ’Ã‚Â©crire, appelle write_file immÃƒÆ’Ã‚Â©diatement. Sinon (tous les fichiers sont prÃƒÆ’Ã‚Âªts), appelle start_dev_server sur le dossier du projet. Ne gÃƒÆ’Ã‚Â©nÃƒÆ’Ã‚Â¨re PAS de texte d'explication entre deux outils.`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur ÃƒÆ’Ã‚Â©criture fichier]: ${err}`, cfg);
-                            }
+                        if (await handleWriteFile({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ open_browser (ouvrir une URL dans le navigateur intÃƒÆ’Ã‚Â©grÃƒÆ’Ã‚Â©) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.open_browser !== undefined) {
-                            try {
-                                const targetUrl = parsedTool.open_browser as string;
-                                onOpenBrowserUrl?.(targetUrl);
-                                await new Promise((r) => setTimeout(r, 1500));
-                                const errs = await invoke<string[]>("get_browser_errors").catch(() => [] as string[]);
-                                const errReport =
-                                    errs.length > 0
-                                        ? `\nErreurs JS capturÃƒÆ’Ã‚Â©es :\n${errs.map((e, i) => `${i + 1}. ${e}`).join("\n")}`
-                                        : "\nAucune erreur JS capturÃƒÆ’Ã‚Â©e.";
-                                await sendPrompt(`[Navigateur] Page ouverte : ${targetUrl}${errReport}`, cfg);
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur open_browser]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleOpenBrowser({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                critiqueOutput: withAutoCritique,
+                                onOpenBrowserUrl,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_browser_errors (lire les erreurs JS capturÃƒÆ’Ã‚Â©es) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.get_browser_errors !== undefined) {
-                            try {
-                                const errs = await invokeWithTimeout<string[]>("get_browser_errors", {}, 5000);
-                                const report =
-                                    errs.length === 0
-                                        ? "Aucune erreur capturÃƒÆ’Ã‚Â©es."
-                                        : errs.map((e, i) => `${i + 1}. ${e}`).join("\n");
-
-                                // DÃƒÆ’Ã‚Â©tecter les erreurs pointant vers des fichiers EXTERNES (pas index.html)
-                                let externalFilesNote = "";
-                                if (errs.length > 0) {
-                                    const externalPaths = new Set<string>();
-                                    for (const e of errs) {
-                                        const m = e.match(/\(https?:\/\/[^/]+\/([^:)]+):\d+:\d+\)/);
-                                        if (m && !m[1].endsWith("index.html")) {
-                                            externalPaths.add(m[1]); // ex: "src/index.js"
-                                        }
-                                    }
-                                    if (externalPaths.size > 0) {
-                                        const paths = [...externalPaths];
-                                        externalFilesNote =
-                                            `\n\nÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â ATTENTION ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â FICHIERS EXTERNES DÃƒÆ’Ã¢â‚¬Â°TECTÃƒÆ’Ã¢â‚¬Â°S :\n` +
-                                            `Ces erreurs NE viennent PAS de ton index.html, elles pointent vers :\n` +
-                                            paths.map((p) => `  - ${p}`).join("\n") +
-                                            `\nDIAGNOSTIC OBLIGATOIRE AVANT TOUT PATCH :\n` +
-                                            `  1. As-tu crÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â© ces fichiers toi-mÃƒÆ’Ã‚Âªme ? Si oui ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ lis-les avec read_file.\n` +
-                                            `  2. Si non ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ le serveur de dev charge un template par dÃƒÆ’Ã‚Â©faut. Dans ce cas :\n` +
-                                            `     ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Utilise cmd pour lister le dossier du projet et identifier les fichiers parasites.\n` +
-                                            `     ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Supprime ou ignore ces fichiers (ils ne font pas partie de ton projet).\n` +
-                                            `  3. NE JAMAIS patcher ton index.html pour corriger une erreur provenant d'un autre fichier.`;
-                                    }
-                                }
-
-                                const base = errs.length > 0 ? withAutoCritique(report, "get_browser_errors") : report;
-                                await sendPrompt(`[Erreurs navigateur]\n${base}${externalFilesNote}`, cfg);
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur get_browser_errors]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleGetBrowserErrors({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                critiqueOutput: withAutoCritique,
+                                onOpenBrowserUrl,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stop_dev_server ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.stop_dev_server !== undefined) {
-                            try {
-                                await invokeWithTimeout<void>("stop_dev_server", {}, 5000);
-                                await sendPrompt(`[Serveur dev arrÃƒÆ’Ã‚ÂªtÃƒÆ’Ã‚Â©] Le serveur local a ÃƒÆ’Ã‚Â©tÃƒÆ’Ã‚Â© stoppÃƒÆ’Ã‚Â©.`, cfg);
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur stop_dev_server]: ${err}`, cfg);
-                            }
+                        if (await handleStopDevServer({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ start_dev_server (dÃƒÆ’Ã‚Â©marrer le serveur local) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.start_dev_server !== undefined) {
-                            try {
-                                const dir = parsedTool.start_dev_server as string;
-                                const port = await invokeWithTimeout<number>(
-                                    "start_dev_server",
-                                    { baseDir: dir, port: 7820 },
-                                    8000,
-                                );
-                                const devUrl = `http://127.0.0.1:${port}/`;
-                                onOpenBrowserUrl?.(devUrl);
-                                shellOpen(devUrl).catch(() => {});
-                                await new Promise((r) => setTimeout(r, 1500));
-                                const errs = await invoke<string[]>("get_browser_errors").catch(() => [] as string[]);
-                                let errReport = "\nAucune erreur JS capturÃƒÆ’Ã‚Â©e au dÃƒÆ’Ã‚Â©marrage.";
-                                if (errs.length > 0) {
-                                    const lines = errs.map((e, i) => `${i + 1}. ${e}`).join("\n");
-                                    const externalPaths = new Set<string>();
-                                    for (const e of errs) {
-                                        const m = e.match(/\(https?:\/\/[^/]+\/([^:)]+):\d+:\d+\)/);
-                                        if (m && !m[1].endsWith("index.html")) externalPaths.add(m[1]);
-                                    }
-                                    errReport = `\nErreurs JS capturÃƒÆ’Ã‚Â©es :\n${lines}`;
-                                    if (externalPaths.size > 0) {
-                                        errReport +=
-                                            `\n\nÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Ces erreurs pointent vers des fichiers EXTERNES (${[...externalPaths].join(", ")}) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ` +
-                                            `probablement un template du serveur. Utilise cmd pour lister le dossier et identifier les fichiers parasites.`;
-                                    }
-                                }
-                                await sendPrompt(
-                                    `[Serveur dev dÃƒÆ’Ã‚Â©marrÃƒÆ’Ã‚Â©] ${devUrl} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â dossier : ${dir}${errReport}\nProchaine action OBLIGATOIRE : appelle get_browser_errors pour valider le rendu, puis open_browser pour ouvrir la page.`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur start_dev_server]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleStartDevServer({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                critiqueOutput: withAutoCritique,
+                                onOpenBrowserUrl,
+                            })
+                        ) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ save_image (sauvegarder une image base64 sur disque) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.save_image !== undefined) {
-                            try {
-                                const result = await invokeWithTimeout<{
-                                    path: string;
-                                    dataUrl: string;
-                                    filename: string;
-                                }>(
-                                    "save_image",
-                                    { dataUrl: parsedTool.save_image, filename: parsedTool.filename ?? null },
-                                    20000,
-                                );
-                                await sendPrompt(
-                                    `[Image sauvegardÃƒÆ’Ã‚Â©e] \`${result.path}\`\n![${result.filename}](${result.dataUrl})`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur save_image]: ${err}`, cfg);
-                            }
+                        if (await handleSaveImage({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ download_image (tÃƒÆ’Ã‚Â©lÃƒÆ’Ã‚Â©charger une image depuis une URL) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.download_image !== undefined) {
-                            try {
-                                const result = await invokeWithTimeout<{
-                                    path: string;
-                                    dataUrl: string;
-                                    filename: string;
-                                }>(
-                                    "download_image",
-                                    { url: parsedTool.download_image, filename: parsedTool.filename ?? null },
-                                    30000,
-                                );
-                                await sendPrompt(
-                                    `[Image tÃƒÆ’Ã‚Â©lÃƒÆ’Ã‚Â©chargÃƒÆ’Ã‚Â©e] \`${result.path}\`\n![${result.filename}](${result.dataUrl})`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur download_image]: ${err}`, cfg);
-                            }
+                        if (await handleDownloadImage({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ search_web (recherche web rÃƒÆ’Ã‚Â©elle) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.search_web !== undefined) {
-                            const swQuery = parsedTool.search_web as string;
-                            const swSource = (parsedTool.source as string) || "duckduckgo";
-                            const swLocale = (parsedTool.locale as string) || "fr";
-                            if (!swQuery || typeof swQuery !== "string") {
-                                await sendPrompt(`[Erreur search_web]: paramÃƒÆ’Ã‚Â¨tre query requis`, cfg);
-                                return;
-                            }
-                            let swApiKey: string | null = null;
-                            if (swSource === "brave") swApiKey = localStorage.getItem("search_brave_api_key") || null;
-                            if (swSource === "serper") swApiKey = localStorage.getItem("search_serper_api_key") || null;
-                            if (swSource === "tavily") swApiKey = localStorage.getItem("search_tavily_api_key") || null;
-                            try {
-                                interface SWResult {
-                                    title: string;
-                                    snippet: string;
-                                    url: string;
-                                    source: string;
-                                }
-                                const results = await invokeWithTimeout<SWResult[]>(
-                                    "search_web",
-                                    { query: swQuery, source: swSource, apiKey: swApiKey, locale: swLocale },
-                                    20000,
-                                );
-                                const lines = results
-                                    .map((r, i) => `${i + 1}. **${r.title}**\n   ${r.snippet}\n   ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ${r.url}`)
-                                    .join("\n\n");
-                                await sendPrompt(
-                                    `[RÃƒÆ’Ã‚Â©sultats de recherche ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â source: ${swSource}]\nRequÃƒÆ’Ã‚Âªte: "${swQuery}"\n\n${lines}`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur search_web]: ${err}`, cfg);
-                            }
+                        if (await handleSearchWeb({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ scrape_url (extraire le contenu d'une page web) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.scrape_url !== undefined) {
-                            const scrapeTarget = parsedTool.scrape_url as string;
-                            const scrapeMode = (parsedTool.mode as string) || "static";
-                            if (!scrapeTarget || typeof scrapeTarget !== "string") {
-                                await sendPrompt(`[Erreur scrape_url]: paramÃƒÆ’Ã‚Â¨tre url requis`, cfg);
-                                return;
-                            }
-                            try {
-                                interface ScrapedPage {
-                                    url: string;
-                                    title: string;
-                                    description: string;
-                                    text: string;
-                                    headings: { level: string; text: string }[];
-                                    links: { text: string; href: string }[];
-                                    mode: string;
-                                }
-                                const page = await invokeWithTimeout<ScrapedPage>(
-                                    "scrape_url",
-                                    { url: scrapeTarget, mode: scrapeMode },
-                                    scrapeMode === "js" ? 20000 : 35000,
-                                );
-                                const headingsMd =
-                                    page.headings.length > 0
-                                        ? "\n**Titres :**\n" +
-                                          page.headings.map((h) => `- [${h.level}] ${h.text}`).join("\n")
-                                        : "";
-                                const linksMd =
-                                    page.links.length > 0
-                                        ? "\n**Liens (top 10) :**\n" +
-                                          page.links
-                                              .slice(0, 10)
-                                              .map((l) => `- [${l.text || l.href}](${l.href})`)
-                                              .join("\n")
-                                        : "";
-                                await sendPrompt(
-                                    `[Page scrapÃƒÆ’Ã‚Â©e ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â mode:${page.mode}]\n**URL :** ${page.url}\n**Titre :** ${page.title}\n**Description :** ${page.description}\n\n**Contenu :**\n${page.text}${headingsMd}${linksMd}`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur scrape_url]: ${err}`, cfg);
-                            }
+                        if (await handleScrapeUrl({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ save_fact JSON ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.save_fact !== undefined) {
-                            try {
-                                const key = String(parsedTool.save_fact);
-                                const val = String(parsedTool.value ?? "");
-                                if (key && val) {
-                                    await invokeWithTimeout<void>("save_user_fact", { key, value: val }, 5000).catch(
-                                        () => {},
-                                    );
-                                }
-                            } catch {
-                                /* silencieux */
-                            }
-                            await sendPrompt(
-                                `[Fait mÃƒÆ’Ã‚Â©morisÃƒÆ’Ã‚Â©] Poursuis ta rÃƒÆ’Ã‚Â©ponse lÃƒÆ’Ã‚Â  oÃƒÆ’Ã‚Â¹ tu t'es arrÃƒÆ’Ã‚ÂªtÃƒÆ’Ã‚Â© ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ne rÃƒÆ’Ã‚Â©pÃƒÆ’Ã‚Â¨te pas ce que tu as dÃƒÆ’Ã‚Â©jÃƒÆ’Ã‚Â  dit.`,
-                                cfg,
-                            );
+                        if (await handleSaveFact({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ patch_file JSON (format alternatif ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â SEARCH/REPLACE comme clÃƒÆ’Ã‚Â©s) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.patch_file !== undefined) {
-                            const filePath = String(parsedTool.patch_file);
-                            const searchStr = String(parsedTool.SEARCH ?? parsedTool.search ?? "");
-                            const replaceStr = String(parsedTool.REPLACE ?? parsedTool.replace ?? "");
-                            if (!searchStr) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(
-                                    `[Erreur patch_file] ParamÃƒÆ’Ã‚Â¨tre SEARCH manquant.\n` +
-                                        `RAPPEL : utilise le format TAG <patch_file> ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â JAMAIS le format JSON pour patch_file :\n` +
-                                        `<patch_file path="${filePath}">SEARCH:\n` +
-                                        `<texte exact ÃƒÆ’Ã‚Â  trouver>\n` +
-                                        `REPLACE:\n` +
-                                        `<nouveau texte>\n` +
-                                        `</patch_file>`,
-                                    cfg,
-                                );
-                                return;
-                            }
-                            try {
-                                const result = await invokeWithTimeout<string>(
-                                    "patch_file",
-                                    { path: filePath, search: searchStr, replace: replaceStr },
-                                    20000,
-                                );
-                                await sendPrompt(
-                                    `[patch_file] ${result}\n` +
-                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â RAPPEL : utilise le format TAG <patch_file path="..."> ÃƒÆ’Ã‚Â  l'avenir ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas le format JSON.`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(
-                                    `[Erreur patch_file sur "${filePath}"]: ${err}\n` +
-                                        `RAPPEL : le format correct est le TAG <patch_file path="${filePath}">SEARCH:\n...\nREPLACE:\n...</patch_file>`,
-                                    cfg,
-                                );
-                            }
+                        if (await handlePatchFileJson({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ cmd (commande ponctuelle) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        const cmd = parsedTool.cmd ?? parsedTool.command ?? "";
-                        if (cmd.trim()) {
-                            try {
-                                const output = await invokeWithTimeout<string>(
-                                    "run_shell_command",
-                                    { command: cmd },
-                                    60000,
-                                );
-                                await sendPrompt(
-                                    `[RÃƒÆ’Ã‚Â©sultat de la commande \`${cmd}\`]\n\`\`\`\n${withAutoCritique(output, `cmd:${cmd}`)}\n\`\`\``,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur commande \`${cmd}\`]: ${err}`, cfg);
-                            }
-                        } else {
-                            // Aucun outil reconnu dans le JSON parsÃƒÆ’Ã‚Â© ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ forcer une rÃƒÆ’Ã‚Â©ponse pour ÃƒÆ’Ã‚Â©viter le silence
-                            const knownKeys = Object.keys(parsedTool).join(", ");
-                            await sendPrompt(
-                                `[SystÃƒÆ’Ã‚Â¨me] Outil inconnu ou clÃƒÆ’Ã‚Â© non reconnue : { ${knownKeys} }.\n` +
-                                    `VÃƒÆ’Ã‚Â©rifie le nom de l'outil avec get_tool_doc ou consulte la liste des outils disponibles.`,
+                        if (
+                            await handleRunCommand({
+                                parsedTool,
                                 cfg,
-                            );
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                critiqueOutput: withAutoCritique,
+                            })
+                        ) {
+                            return;
                         }
+                        await handleUnknownTool({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef });
                     };
                     // Exposer dispatch pour les boutons de confirmation
                     dispatchToolRef.current = dispatch;
 
                     // Si plusieurs <tool> dans le mÃƒÆ’Ã‚Âªme message, exÃƒÆ’Ã‚Â©cuter UNIQUEMENT le premier ici.
                     // Exception : si ce sont tous des write_file consÃƒÆ’Ã‚Â©cutifs, les exÃƒÆ’Ã‚Â©cuter tous d'un coup.
-                    const remainingWriteFiles = allToolMatches.slice(1).reduce<Record<string, string>[]>((acc, m) => {
-                        try {
-                            const p = JSON.parse(sanitizeLlmJson(m[1]));
-                            if (p.write_file) acc.push(p);
-                        } catch {
-                            /* ignore */
-                        }
-                        return acc;
-                    }, []);
+                    const remainingWriteFiles = collectRemainingWriteFiles(
+                        allToolMatches.map((match) => {
+                            const copy = [...match];
+                            return copy as RegExpMatchArray;
+                        }),
+                    );
 
                     if (parsed.write_file && remainingWriteFiles.length > 0) {
                         // Mode batch : exÃƒÆ’Ã‚Â©cute tous les write_file du message en une fois
-                        (async () => {
-                            const results: string[] = [];
-                            const allFiles = [parsed, ...remainingWriteFiles];
-                            for (const fileTool of allFiles) {
-                                try {
-                                    const rawContent = fileTool.content ?? "";
-                                    const content = rawContent
-                                        .replace(/\\n/g, "\n")
-                                        .replace(/\\t/g, "\t")
-                                        .replace(/\\r/g, "\r");
-                                    const r = await invokeWithTimeout<string>(
-                                        "write_file",
-                                        { path: fileTool.write_file, content },
-                                        20000,
-                                    );
-                                    results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ ${r}`);
-                                } catch (err) {
-                                    results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬â€ ${fileTool.write_file} : ${err}`);
-                                }
-                            }
-                            await sendPrompt(
-                                `[Fichiers ÃƒÆ’Ã‚Â©crits en batch]\n${results.join("\n")}\n` +
-                                    `PROCHAINE ACTION OBLIGATOIRE : appelle start_dev_server sur le dossier du projet.`,
-                                config,
-                            );
-                        })().finally(() => setToolRunning(false));
+                        runWriteFileBatch([parsed, ...remainingWriteFiles], config, sendPrompt).finally(() =>
+                            setToolRunning(false),
+                        );
                     } else {
                         dispatch(parsed, config).finally(() => setToolRunning(false));
                     }
