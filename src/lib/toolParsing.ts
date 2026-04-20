@@ -4,6 +4,13 @@ export type MessageSegment =
     | { type: "patch_file"; path: string; body: string }
     | { type: "write_file_tag"; path: string; content: string };
 
+export type PatchFileTag = {
+    path: string;
+    body: string;
+    search: string | null;
+    replace: string | null;
+};
+
 /**
  * Normalise les variantes de tool call tags vers <tool>...</tool>
  * — Gemma 4 : <|tool_call>tool>, etc.
@@ -166,3 +173,24 @@ export const parseMessageSegments = (normalized: string): MessageSegment[] => {
     }
     return segments;
 };
+
+export const extractPatchFileTags = (normalized: string): PatchFileTag[] =>
+    [...normalized.matchAll(/<patch_file\s+path="([^"]+)">([\s\S]*?)<\/patch_file>/g)]
+        .map((match) => {
+            const body = match[2];
+            const searchMatch = body.match(/SEARCH:[ \t]?\r?\n?([\s\S]*?)(?=\r?\n?[ \t]*REPLACE:[ \t]?\r?\n?)/);
+            const replaceMatch = body.match(/REPLACE:[ \t]?\r?\n?([\s\S]*)$/);
+            return {
+                path: match[1],
+                body,
+                search: searchMatch ? searchMatch[1].trim() : null,
+                replace: replaceMatch ? replaceMatch[1].trimEnd() : null,
+            };
+        })
+        .filter((tag) => /REPLACE:/i.test(tag.body));
+
+export const extractWriteFileTags = (normalized: string): Array<{ path: string; content: string }> =>
+    [...normalized.matchAll(/<write_file\s+path="([^"]+)">([\/\s\S]*?)<\/write_file>/g)].map((match) => ({
+        path: match[1],
+        content: match[2],
+    }));

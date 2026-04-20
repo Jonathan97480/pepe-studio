@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { hasPatchBlocks, applyAllPatches, type PatchResult } from "../lib/skillPatcher";
-import { normalizeToolTags, sanitizeLlmJson, extractWriteFileTool, invokeWithTimeout } from "../lib/chatUtils";
+import { normalizeToolTags, sanitizeLlmJson, extractWriteFileTool } from "../lib/chatUtils";
 import { describeTool, isActionTool, resolveToolDoc } from "../lib/toolDispatchUtils";
 import {
     handleBatchRename,
@@ -35,6 +35,7 @@ import {
     handleWriteFile,
     runWriteFileBatch,
 } from "../lib/toolCoreHandlers";
+import { handlePatchFileTags, handleWriteFileTags } from "../lib/toolTagHandlers";
 import {
     handleCallMcpTool,
     handleContext7Docs,
@@ -186,143 +187,55 @@ export function useToolCalling({
             if (lastMsg?.role === "assistant" && lastMsg.content) {
                 const normalizedContent = normalizeToolTags(lastMsg.content);
 
-                // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Format <patch_file path="...">SEARCH:\n...\nREPLACE:\n...</patch_file> ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                const pfTagMatches = [
-                    ...normalizedContent.matchAll(/<patch_file\s+path="([^"]+)">([\s\S]*?)<\/patch_file>/g),
-                ];
-                if (pfTagMatches.length > 0) {
-                    const config: Partial<LlamaLaunchConfig> = {
-                        modelPath,
-                        temperature,
-                        contextWindow,
-                        turboQuant,
-                        sampling,
-                        thinkingEnabled,
-                        systemPrompt: machineContext
-                            ? machineContext + (systemPrompt ? "\n\n" + systemPrompt : "")
-                            : systemPrompt,
-                    };
-                    setToolRunning(true);
-                    (async () => {
-                        const results: string[] = [];
-                        for (const m of pfTagMatches) {
-                            const filePath = m[1];
-                            const body = m[2];
-                            const searchMatch = body.match(
-                                /SEARCH:[ \t]?\r?\n?([\s\S]*?)(?=\r?\n?[ \t]*REPLACE:[ \t]?\r?\n?)/,
-                            );
-                            const replaceMatch = body.match(/REPLACE:[ \t]?\r?\n?([\s\S]*)$/);
-                            if (!searchMatch || !replaceMatch) {
-                                lastToolWasErrorRef.current = true;
-                                const missingPart = !searchMatch ? "SEARCH" : "REPLACE";
-                                results.push(
-                                    `ÃƒÂ¢Ã…â€œÃ¢â‚¬â€ ${filePath} : bloc ${missingPart} manquant dans <patch_file>.\n` +
-                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Format obligatoire ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â exemple correct :\n` +
-                                        `<patch_file path="${filePath}">\n` +
-                                        `SEARCH:\n` +
-                                        `texte exact ÃƒÆ’Ã‚Â  trouver (copiÃƒÆ’Ã‚Â© mot pour mot depuis le fichier)\n` +
-                                        `REPLACE:\n` +
-                                        `nouveau texte ÃƒÆ’Ã‚Â  mettre ÃƒÆ’Ã‚Â  la place\n` +
-                                        `</patch_file>\n` +
-                                        `RÃƒÆ’Ã‹â€ GLE : N'utilise JAMAIS ce tag sans bloc REPLACE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â mÃƒÆ’Ã‚Âªme pour montrer un aperÃƒÆ’Ã‚Â§u.`,
-                                );
-                                continue;
-                            }
-                            const search = searchMatch[1].trim();
-                            const replace = replaceMatch[1].trimEnd();
-                            try {
-                                const r = await invokeWithTimeout<string>(
-                                    "patch_file",
-                                    { path: filePath, search, replace },
-                                    20000,
-                                );
-                                results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ ${r}`);
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬â€ ${filePath} : ${err}`);
-                            }
-                        }
-                        const allOk = results.every((r) => r.startsWith("ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“"));
-                        if (!allOk) lastToolWasErrorRef.current = true;
-                        await sendPrompt(
-                            `[RÃƒÆ’Ã‚Â©sultats patch_file]\n${results.join("\n")}\n` +
-                                (allOk
-                                    ? `Patch(es) appliquÃƒÆ’Ã‚Â©(s) avec succÃƒÆ’Ã‚Â¨s.`
-                                    : `ÃƒÂ¢Ã¢â‚¬ÂºÃ¢â‚¬Â PATCH ÃƒÆ’Ã¢â‚¬Â°CHOUÃƒÆ’Ã¢â‚¬Â° ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â PROTOCOLE OBLIGATOIRE :\n` +
-                                      `  1. Appelle read_file sur le fichier pour voir le texte EXACT\n` +
-                                      `  2. Compare caractÃƒÆ’Ã‚Â¨re par caractÃƒÆ’Ã‚Â¨re ton bloc SEARCH avec le texte rÃƒÆ’Ã‚Â©el\n` +
-                                      `  3. Corrige le SEARCH et relance patch_file\n` +
-                                      `INTERDIT : basculer vers write_file pour rÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â©crire le fichier ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â la capitulation est une erreur grave.\n` +
-                                      `INTERDIT : dire "le patching est un leurre" ou "je vais rÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â©crire" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â la cause est toujours un SEARCH incorrect.\n` +
-                                      `Ne fais RIEN d'autre avant que le patch soit appliquÃƒÆ’Ã‚Â© avec succÃƒÆ’Ã‚Â¨s.`),
-                            config,
-                        );
-                    })().finally(() => setToolRunning(false));
-                    return;
-                }
+                const config: Partial<LlamaLaunchConfig> = {
+                    modelPath,
+                    temperature,
+                    contextWindow,
+                    turboQuant,
+                    sampling,
+                    thinkingEnabled,
+                    systemPrompt: machineContext
+                        ? machineContext + (systemPrompt ? "\n\n" + systemPrompt : "")
+                        : systemPrompt,
+                };
 
-                // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Format <write_file path="...">CONTENT</write_file> ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                const wfTagMatches = [
-                    ...normalizedContent.matchAll(/<write_file\s+path="([^"]+)">([\/\s\S]*?)<\/write_file>/g),
-                ];
-                if (wfTagMatches.length > 0) {
-                    const config: Partial<LlamaLaunchConfig> = {
-                        modelPath,
-                        temperature,
-                        contextWindow,
-                        turboQuant,
-                        sampling,
-                        thinkingEnabled,
-                        systemPrompt: machineContext
-                            ? machineContext + (systemPrompt ? "\n\n" + systemPrompt : "")
-                            : systemPrompt,
-                    };
-                    setToolRunning(true);
-                    (async () => {
-                        const results: string[] = [];
-                        for (const m of wfTagMatches) {
-                            const filePath = m[1];
-                            const fileContent = m[2];
-                            try {
-                                const r = await invokeWithTimeout<string>(
-                                    "write_file",
-                                    { path: filePath, content: fileContent },
-                                    20000,
-                                );
-                                results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ ${r}`);
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬â€ ${filePath} : ${err}`);
-                            }
-                        }
-                        await sendPrompt(
-                            `[Fichiers ÃƒÆ’Ã‚Â©crits]\n${results.join("\n")}\n` +
-                                `PROCHAINE ACTION OBLIGATOIRE : appelle start_dev_server sur le dossier du projet.`,
-                            config,
-                        );
-                    })().finally(() => setToolRunning(false));
-                    return;
-                }
+                setToolRunning(true);
+                (async () => {
+                    const handledPatchTags = await handlePatchFileTags({
+                        normalizedContent,
+                        cfg: config,
+                        sendPrompt,
+                        lastToolWasErrorRef,
+                    });
+                    if (handledPatchTags) return;
 
-                // Extraire TOUS les blocs <tool> dans l'ordre
-                const allToolMatches = [...normalizedContent.matchAll(/<tool>\s*([\s\S]*?)\s*<\/tool>/g)];
-                const toolMatch = allToolMatches.length > 0 ? allToolMatches[0] : null;
-                if (toolMatch) {
-                    let parsed: Record<string, string> | null = null;
-                    let parseError: unknown = null;
-                    try {
-                        parsed = JSON.parse(sanitizeLlmJson(toolMatch[1]));
-                    } catch (jsonErr) {
-                        parseError = jsonErr;
-                        if (toolMatch[1].includes('"write_file"')) {
-                            const extracted = extractWriteFileTool(toolMatch[1]);
-                            if (extracted) {
-                                parsed = extracted as unknown as Record<string, string>;
-                                parseError = null;
+                    const handledWriteTags = await handleWriteFileTags({
+                        normalizedContent,
+                        cfg: config,
+                        sendPrompt,
+                        lastToolWasErrorRef,
+                    });
+                    if (handledWriteTags) return;
+
+                    // Extraire TOUS les blocs <tool> dans l'ordre
+                    const allToolMatches = [...normalizedContent.matchAll(/<tool>\s*([\s\S]*?)\s*<\/tool>/g)];
+                    const toolMatch = allToolMatches.length > 0 ? allToolMatches[0] : null;
+                    if (toolMatch) {
+                        let parsed: Record<string, string> | null = null;
+                        let parseError: unknown = null;
+                        try {
+                            parsed = JSON.parse(sanitizeLlmJson(toolMatch[1]));
+                        } catch (jsonErr) {
+                            parseError = jsonErr;
+                            if (toolMatch[1].includes('"write_file"')) {
+                                const extracted = extractWriteFileTool(toolMatch[1]);
+                                if (extracted) {
+                                    parsed = extracted as unknown as Record<string, string>;
+                                    parseError = null;
+                                }
                             }
                         }
-                    }
-                    if (parseError !== null || parsed === null) {
+                        if (parseError !== null || parsed === null) {
                         jsonParseErrorCountRef.current += 1;
                         const config: Partial<LlamaLaunchConfig> = {
                             modelPath,
@@ -937,7 +850,8 @@ export function useToolCalling({
                     } else {
                         dispatch(parsed, config).finally(() => setToolRunning(false));
                     }
-                }
+                    }
+                })().finally(() => setToolRunning(false));
             }
         }
         // Sauvegarder la rÃƒÆ’Ã‚Â©ponse assistant une fois le streaming terminÃƒÆ’Ã‚Â©
