@@ -87,9 +87,9 @@ export function useModels() {
             setModelFiles(files);
             setMmprojFiles(mmprojs);
             setModelConfigs(configs);
-        } catch (e: any) {
+        } catch (e: unknown) {
             console.error("[useModels] refresh failed", e);
-            setError(e?.message ?? String(e));
+            setError(getErrorMessage(e));
         } finally {
             setLoading(false);
         }
@@ -171,3 +171,4 @@ export function useModels() {
         deleteConfig,
     };
 }
+    const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));

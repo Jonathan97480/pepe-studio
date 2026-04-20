@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "isolatedModules": false,
+    "noEmit": false,
+    "outDir": ".codex-tests",
+    "rootDir": ".",
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": [
+    "tests/**/*.ts",
+    "src/lib/toolParsing.ts",
+    "src/lib/patchParsing.ts"
+  ]
+}

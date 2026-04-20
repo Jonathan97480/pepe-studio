@@ -97,6 +97,21 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
+## Qualité
+
+```bash
+# Lint + typecheck
+npm run check
+
+# Tests web ciblés sur les parseurs/utilitaires purs
+npm run test:web
+
+# Tests Rust
+npm run test:rust
+```
+
+`npm run tauri:dev` est désormais portable : le script lance `next dev` puis `cargo run` depuis le dossier courant, sans chemin absolu machine.
+
 ---
 
 ## Structure du projet
@@ -114,6 +129,45 @@ pepe-studio/
 ├── models/               # Modèles GGUF (non versionnés)
 └── public/               # Assets statiques
 ```
+
+---
+
+## Notes d'architecture
+
+### Frontend
+
+- `src/components/ChatWindow.tsx` orchestre la conversation, mais l'UI est désormais découpée entre en-tête, panneaux de conversation et composeur.
+- `src/hooks/useToolCalling.ts` reste le point d'exécution des outils; les parseurs purs ont été isolés dans `src/lib/toolParsing.ts` pour être testables.
+- `src/components/Layout.tsx` garde l'état global des panneaux, tandis que `src/components/WorkspaceWindows.tsx` porte les fenêtres flottantes navigateur/terminal.
+
+### Backend Rust
+
+- `src-tauri/src/main.rs` expose les commandes Tauri.
+- `src-tauri/src/db.rs` gère la persistance SQLite.
+- `src-tauri/src/terminal_manager.rs`, `scraper.rs`, `mcp.rs` et `llama_sidecar.rs` couvrent respectivement terminal, web, MCP et runtime modèle.
+
+### Flux d'un tool call
+
+1. Le modèle émet un bloc `<tool>` ou un tag spécialisé.
+2. `useToolCalling` normalise et parse ce bloc.
+3. Le frontend appelle la commande Tauri ou le handler local correspondant.
+4. Le résultat revient dans la conversation sous forme de message système/utilisateur.
+
+### Modes Ask / Plan / Agent
+
+- `ask` : réponse textuelle, pas d'action automatique.
+- `plan` : l'agent propose puis demande confirmation avant les actions sensibles.
+- `agent` : exécution directe des outils disponibles.
+
+### Choix `output: "export"`
+
+Ce projet utilise l'export statique Next pour s'intégrer proprement à Tauri.
+
+Conséquences :
+
+- pas de SSR Next côté runtime
+- routes et assets devant rester compatibles export statique
+- préférence pour des composants client explicites quand l'UI dépend d'API navigateur/Tauri
 
 ---
 

@@ -1,20 +1,21 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { open as shellOpen } from "@tauri-apps/api/shell";
 import { searchLibrary, queryDocs } from "../tools/Context7Client";
 import { hasPatchBlocks, applyAllPatches, type PatchResult } from "../lib/skillPatcher";
 import { normalizeToolTags, sanitizeLlmJson, extractWriteFileTool, invokeWithTimeout } from "../lib/chatUtils";
 import { extractPdfPagesFromBase64 } from "../lib/pdfExtract";
+import { TOOL_DOCS } from "../lib/toolDocs";
 import type { LlamaMessage, Attachment } from "./useLlama";
 import type { LlamaLaunchConfig } from "../lib/llamaWrapper";
 import type { TurboQuantType } from "../context/ModelSettingsContext";
 import type { ChatMode } from "../lib/chatUtils";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
-// Curseurs de lecture par terminal_id — pour ne retourner que le NOUVEAU texte après terminal_send_stdin
+// Curseurs de lecture par terminal_id ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pour ne retourner que le NOUVEAU texte aprÃƒÆ’Ã‚Â¨s terminal_send_stdin
 const terminalReadCursors: Map<string, number> = new Map();
 
-/** Supprime les séquences d'échappement ANSI/VT pour ne passer que du texte brut au LLM. */
+/** Supprime les sÃƒÆ’Ã‚Â©quences d'ÃƒÆ’Ã‚Â©chappement ANSI/VT pour ne passer que du texte brut au LLM. */
 function stripAnsi(s: string): string {
     return s
         .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "") // CSI sequences: ESC [ ... letter
@@ -25,368 +26,9 @@ function stripAnsi(s: string): string {
         .replace(/\x1b\[\d*[ABCDK]/g, ""); // cursor movement leftovers
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Documentation intégrée de chaque outil — utilisée par get_tool_doc
-// ─────────────────────────────────────────────────────────────────────────────
-const TOOL_DOCS: Record<string, string> = {
-    cmd: `=== cmd — Commande PowerShell ponctuelle ===
-Usage : <tool>{"cmd": "Get-Date"}</tool>
-• Exécute une commande dans un processus isolé (le cwd ne persiste PAS).
-• Enchaîne plusieurs commandes avec ; (JAMAIS &&).
-• Utilise des chemins absolus ou Set-Location ; avant ta commande.
-⛔ RÈGLE JSON ABSOLUE : utilise TOUJOURS des guillemets SIMPLES (') pour les chemins et chaînes dans la valeur cmd.
-   Les guillemets doubles (\") à l'intérieur du JSON brisent le parseur — erreur garantie.
-   ✗ JAMAIS  : {"cmd": "Rename-Item -Path \\"E:/Mon Dossier/f.pdf\\" -NewName \\"n.pdf\\""}
-   ✓ CORRECT : {"cmd": "Rename-Item -Path 'E:/Mon Dossier/f.pdf' -NewName 'n.pdf'"}
-Exemples :
-  <tool>{"cmd": "node --version"}</tool>
-  <tool>{"cmd": "New-Item -ItemType Directory -Force 'E:/projet'; Set-Location 'E:/projet'; git init"}</tool>
-  <tool>{"cmd": "Get-ChildItem -Recurse -Name 'E:/mon-projet'"}</tool>
-  <tool>{"cmd": "Rename-Item -Path 'E:/Mon Dossier/ancien.pdf' -NewName 'nouveau.pdf'"}</tool>
-Quand utiliser cmd (et non terminal persistant) :
-  ✅ Commande unique sans besoin de rester dans le même dossier
-  ✅ Info système, lecture chemin absolu, action ponctuelle
-  ❌ Séquence ≥ 2 commandes dans le même dossier → utilise create_terminal`,
-
-    write_file: `=== write_file — Créer un fichier ===
-UNIQUEMENT pour les NOUVEAUX fichiers. Pour modifier un existant : utilise patch_file.
-
-Format TAG (OBLIGATOIRE pour HTML/CSS/JS/TS — guillemets libres, pas d'escaping) :
-  <write_file path="E:/projet/index.html">
-  <!DOCTYPE html>
-  <html lang="fr">
-  ...contenu brut complet...
-  </html>
-  </write_file>
-
-Format JSON (uniquement pour .txt/.json SIMPLES, contenu < 200 caractères sans guillemets doubles) :
-  <tool>{"write_file": "E:/projet/config.txt", "content": "valeur simple"}</tool>
-
-Règles :
-  • Chemin absolu obligatoire (ex: E:/tetris/index.html)
-  • Les dossiers parents sont créés automatiquement
-  • ⛔ N'utilise JAMAIS le format JSON pour du HTML/CSS/JS → erreurs inévitables`,
-
-    patch_file: `=== patch_file — Modifier un fichier existant ===
-Utilise patch_file pour toute modification dans un fichier qui EXISTE DÉJÀ (< 30 lignes changées).
-NE RÉÉCRIS JAMAIS tout un fichier pour changer quelques lignes.
-
-Format (SEARCH: et REPLACE: sont obligatoires, sur leur propre ligne) :
-  <patch_file path="E:/projet/index.html">SEARCH:
-  <h2>Titre ancien</h2>
-  REPLACE:
-  <h2>Titre nouveau</h2>
-  </patch_file>
-
-Règles CRITIQUES :
-  • SEARCH doit correspondre EXACTEMENT au texte du fichier (espaces, sauts de ligne inclus)
-  • Si doute sur le texte exact → lis d'abord avec read_file
-  • SEARCH doit être unique dans le fichier (ajoute du contexte si nécessaire)
-  • Si le résultat contient ✗ → STOP. Lis le fichier, corrige SEARCH, relance.
-  • Tu peux enchaîner plusieurs blocs patch_file dans la même réponse`,
-
-    read_file: `=== read_file — Lire un fichier ===
-Usage : <tool>{"read_file": "E:/projet/index.html"}</tool>
-• Retourne le contenu complet du fichier dans le contexte.
-• Chemin absolu recommandé.
-• Limite : 512 Ko.
-• ⚠️ Ne fonctionne PAS pour les PDF (binaire) → utilise read_pdf à la place.
-Toujours lire un fichier avant de le modifier (RÈGLE 0).`,
-
-    read_pdf: `=== read_pdf — Lire un fichier PDF complet (toutes les pages) ===
-Usage : <tool>{"read_pdf": "E:/documents/rapport.pdf"}</tool>
-• Retourne le texte de TOUTES les pages — utile pour analyse détaillée ou résumé d'un seul document.
-• ⚠️ Retourne beaucoup de contexte — réservé à l'analyse approfondie d'UN seul PDF.
-• Pour traiter plusieurs PDFs → utilise read_pdf_batch.`,
-
-    read_pdf_brief: `=== read_pdf_brief — Lire la 1ère page d'un seul PDF ===
-Usage : <tool>{"read_pdf_brief": "E:/documents/facture.pdf"}</tool>
-• 1ère page uniquement, max 2000 caractères.
-• ⚠️ Pour traiter PLUSIEURS PDFs en une seule opération → utilise read_pdf_batch (plus efficace).`,
-
-    read_pdf_batch: `=== read_pdf_batch — Lire la 1ère page de PLUSIEURS PDFs en un seul appel ===
-Usage : <tool>{"read_pdf_batch": "[\\"E:/Test IA PDF/fichier1.pdf\\", \\"E:/Test IA PDF/fichier2.pdf\\", ...]"}</tool>
-• ✅ OUTIL PRINCIPAL pour tout traitement en lot de PDFs.
-• Retourne la 1ère page de chaque PDF (max 2000 caractères par fichier) en UN SEUL appel.
-• ⛔ INTERDIT d'appeler read_pdf_brief fichier par fichier quand on traite un lot — utilise read_pdf_batch.
-• Recommandation : envoyer 30 chemins max par appel pour éviter les timeouts.
-Workflow batch PDF OBLIGATOIRE (≥ 2 fichiers à renommer/analyser) :
-  ÉTAPE 1 : list_folder_pdfs → liste complète
-  ÉTAPE 2 : read_pdf_batch sur les 30 premiers chemins → extraire émetteur + numéro de chaque
-  ÉTAPE 3 : Si > 30 fichiers, read_pdf_batch sur le lot suivant, etc.
-  ÉTAPE FINALE : batch_rename avec toutes les entrées [{from, to}] en un seul appel`,
-
-    list_folder_pdfs: `=== list_folder_pdfs — Lister les PDFs d'un dossier ===
-Usage : <tool>{"list_folder_pdfs": "E:/documents"}</tool>
-Usage récursif : <tool>{"list_folder_pdfs": "E:/documents", "recursive": "true"}</tool>
-• Liste tous les fichiers .pdf dans le dossier indiqué.
-• Puis utilise read_pdf_batch pour lire les métadonnées de tous les fichiers.`,
-
-    batch_rename: `=== batch_rename — Renommer plusieurs fichiers en une seule opération ===
-Usage : <tool>{"batch_rename": [{"from": "E:/dossier/ancien.pdf", "to": "nouveau.pdf"}, ...]}</tool>
-• Format TABLEAU NATIF JSON — PAS de guillemets extra autour du tableau.
-• Renomme une liste de fichiers en un seul appel — parfait pour le traitement en lot.
-• "to" peut être un nom simple (reste dans le même dossier) ou un chemin absolu.
-• Retourne le détail de chaque renommage (succès/échec).
-• ⚠️ Maximum 15 fichiers par appel. Si > 15, fais 2 appels séparés.
-⛔ RÈGLE : ne jamais utiliser Rename-Item (cmd) quand on veut renommer plusieurs fichiers — utilise batch_rename.`,
-
-    create_terminal: `=== create_terminal — Ouvrir un terminal persistant ===
-Usage : <tool>{"create_terminal": "nom-projet", "cwd": "E:/MesProjets/mon-projet"}</tool>
-• cwd est OBLIGATOIRE — ne jamais l'omettre.
-• ⚠️ INTERDIT : cwd pointant sur E:/CustomApp ou le dossier de l'application.
-• Si le dossier n'existe pas, il est créé automatiquement.
-• Retourne un terminal_id (ex: "term-1744456789") à réutiliser dans terminal_exec.
-Quand utiliser :
-  ✅ Séquence ≥ 2 commandes dans le même dossier (git + npm + build…)
-  ✅ Initialisation scaffold (npx create-*, cargo new…)`,
-
-    terminal_exec: `=== terminal_exec — Exécuter dans un terminal persistant ===
-Usage : <tool>{"terminal_exec": "git status", "terminal_id": "term-1744456789"}</tool>
-• Le répertoire courant est conservé entre les appels.
-• cd dans terminal_exec change le cwd pour les commandes suivantes.
-• Si l'ID est inconnu → appelle list_terminals d'abord.
-• OBLIGATOIRE : fermer avec close_terminal en fin de tâche.`,
-
-    close_terminal: `=== close_terminal — Fermer un terminal persistant ===
-Usage : <tool>{"close_terminal": "term-1744456789"}</tool>
-• OBLIGATOIRE en fin de tâche pour libérer les ressources.`,
-
-    list_terminals: `=== list_terminals — Lister les terminaux ouverts ===
-Usage : <tool>{"list_terminals": ""}</tool>
-• Retourne la liste des terminaux avec leur id, nom, cwd et nombre de commandes exécutées.`,
-
-    get_terminal_history: `=== get_terminal_history — Historique d'un terminal ===
-Usage : <tool>{"get_terminal_history": "term-1744456789"}</tool>
-• Retourne la liste des commandes exécutées avec leurs sorties.`,
-
-    terminal_start_interactive: `=== terminal_start_interactive — Processus interactif (SSH, REPL…) ===
-Usage : <tool>{"terminal_start_interactive": "ssh user@host", "terminal_id": "term-1744456789"}</tool>
-• Utilise pour TOUTE commande qui nécessite une saisie utilisateur : ssh, telnet, python REPL, node REPL…
-• La sortie s'affiche EN TEMPS RÉEL dans le panneau Terminal (xterm.js).
-• ⚠️ OBLIGATOIRE pour SSH — jamais cmd ni terminal_exec pour des connexions SSH.
-Exemples :
-  <tool>{"terminal_start_interactive": "ssh beroute@192.168.1.28", "terminal_id": "term-xxx"}</tool>
-  <tool>{"terminal_start_interactive": "ssh -o StrictHostKeyChecking=no beroute@192.168.1.28", "terminal_id": "term-xxx"}</tool>
-Flux SSH recommandé :
-  1. create_terminal (cwd = dossier quelconque)
-  2. terminal_start_interactive avec la commande ssh
-  3. Attendre que l'utilisateur entre son mot de passe (session en cours)
-  4. Envoyer les commandes distantes via terminal_send_stdin`,
-
-    terminal_send_stdin: `=== terminal_send_stdin — Envoyer une commande dans un terminal interactif actif ===
-Usage : <tool>{"terminal_send_stdin": "ls -la\\n", "terminal_id": "term-xxx"}</tool>
-• Envoie du texte brut au processus interactif en cours (SSH, REPL, etc.).
-• ✅ LA SORTIE EST AUTOMATIQUEMENT RETOURNÉE après ~2.5 s — tu n'as pas besoin de lire l'historique manuellement.
-• ⚠️ TOUJOURS ajouter \\n à la fin pour exécuter la commande (Entrée).
-• Ctrl+C : envoyer "\\x03" pour interrompre.
-• N'utilise JAMAIS terminal_exec quand un processus interactif est actif.
-Exemples (SSH connecté sur machine distante) :
-  <tool>{"terminal_send_stdin": "ls -la\\n", "terminal_id": "term-xxx"}</tool>
-  <tool>{"terminal_send_stdin": "cat /etc/hostname\\n", "terminal_id": "term-xxx"}</tool>
-  <tool>{"terminal_send_stdin": "iptables -L -n -v\\n", "terminal_id": "term-xxx"}</tool>`,
-
-    create_skill: `=== create_skill — Créer un skill ===
-Types disponibles : ps1 (défaut), python, nodejs, http (single), http (multi-routes), composite.
-
-PS1 :
-  <tool>{"create_skill": "nom", "description": "desc", "content": "# PS1\\nGet-Date"}</tool>
-Python :
-  <tool>{"create_skill": "nom", "description": "desc", "skill_type": "python", "content": "print('hello')"}</tool>
-Node.js :
-  <tool>{"create_skill": "nom", "description": "desc", "skill_type": "nodejs", "content": "console.log('hello')"}</tool>
-HTTP single :
-  <tool>{"create_skill": "nom-api", "description": "desc", "skill_type": "http", "method": "GET", "url": "https://api.example.com/v1/endpoint", "headers": "Authorization: Bearer sk-xxx"}</tool>
-HTTP multi-routes (recommandé pour plusieurs endpoints) :
-  <tool>{"create_skill": "nom-api", "description": "desc", "skill_type": "http", "base_url": "https://api.example.com/v1", "headers": "x-api-key: sk-xxx", "routes": "{\\"list\\":{\\"method\\":\\"GET\\",\\"url\\":\\"/items\\"},\\"create\\":{\\"method\\":\\"POST\\",\\"url\\":\\"/items\\"}}"}</tool>
-Composite (pipeline de skills) :
-  <tool>{"create_skill": "pipeline", "description": "desc", "skill_type": "composite", "content": "[{\\"skill\\":\\"step1\\"},{\\"skill\\":\\"step2\\",\\"chain\\":true}]"}</tool>
-
-Règles JSON content :
-  • guillemet → \\"  |  saut de ligne → \\n  |  pas de vrai saut de ligne dans la valeur JSON
-  • Après "[Skill créé]" : NE recrée PAS le skill, réponds ou teste-le.`,
-
-    run_skill: `=== run_skill — Exécuter un skill ===
-Sans args  : <tool>{"run_skill": "nom-du-skill"}</tool>
-Avec args  : <tool>{"run_skill": "nom-du-skill", "args": "-Param valeur"}</tool>
-HTTP multi : <tool>{"run_skill": "nom-api", "args": "{\\"action\\": \\"list\\"}"}</tool>
-HTTP body  : <tool>{"run_skill": "nom-api", "args": "{\\"action\\": \\"create\\", \\"body\\": \\"{...}\\"}"}</tool>`,
-
-    read_skill: `=== read_skill — Lire le contenu d'un skill ===
-Usage : <tool>{"read_skill": "nom-du-skill"}</tool>
-• Retourne le code source du skill pour inspection avant modification.
-• TOUJOURS lire avant patch_skill.`,
-
-    patch_skill: `=== patch_skill — Modifier un skill existant ===
-Usage : <tool>{"patch_skill": "nom-du-skill", "search": "texte exact", "replace": "nouveau texte"}</tool>
-• Même logique que patch_file : SEARCH doit être exactement dans le contenu.
-• Lis d'abord avec read_skill si tu n'es pas sûr du contenu.`,
-
-    delete_skill: `=== delete_skill — Supprimer un skill ===
-Usage : <tool>{"delete_skill": "nom-du-skill"}</tool>
-• Action irréversible. Demande confirmation avec ask_user avant.`,
-
-    http_request: `=== http_request — Appel API REST direct ===
-GET  : <tool>{"http_request": "GET", "url": "https://api.example.com/endpoint"}</tool>
-POST : <tool>{"http_request": "POST", "url": "https://api.example.com/endpoint", "headers": "Authorization: Bearer sk-xxx\\nContent-Type: application/json", "body": "{\\"key\\": \\"value\\"}"}</tool>
-Méthodes : GET POST PUT DELETE PATCH
-Headers   : format "Clé: Valeur" séparés par \\n
-Réponse   : HTTP <status>\\n<body>
-Dans un skill PS1 : utilise Invoke-WebRequest / Invoke-RestMethod (http_request n'est pas disponible dans un script).`,
-
-    search_web: `=== search_web — Recherche web ===
-Usage : <tool>{"search_web": "requête", "source": "duckduckgo", "locale": "fr"}</tool>
-• source : "duckduckgo" (défaut, gratuit) | "brave" | "serper" | "tavily"
-• locale : code langue (défaut "fr")
-Exemples :
-  <tool>{"search_web": "météo Paris demain"}</tool>
-  <tool>{"search_web": "prix GPU RTX 5090", "source": "brave"}</tool>
-Utilise search_web pour des infos récentes, scrape_url pour lire une page précise.`,
-
-    scrape_url: `=== scrape_url — Lire une page web ===
-Usage : <tool>{"scrape_url": "https://fr.wikipedia.org/wiki/Rust", "mode": "static"}</tool>
-• mode "static" : pages HTML classiques (rapide < 5s)
-• mode "js"     : SPA React/Vue/Angular, contenu chargé par JS (lent ~10s)
-Retourne : titre, description, texte, titres, liens.
-Utilise scrape_url pour lire une page, http_request pour appeler une API REST.`,
-
-    open_browser: `=== open_browser — Ouvrir une URL dans le navigateur intégré ===
-Usage : <tool>{"open_browser": "http://127.0.0.1:7820/index.html"}</tool>
-• Ouvre le navigateur intégré à l'URL spécifiée.
-• Lance d'abord start_dev_server si c'est un projet local.`,
-
-    start_dev_server: `=== start_dev_server — Démarrer le serveur de développement local ===
-Usage : <tool>{"start_dev_server": "E:/mon-projet"}</tool>
-• Démarre un serveur HTTP local sur le dossier spécifié.
-• Retourne l'URL (ex: http://127.0.0.1:7820/index.html).
-• Workflow : write_file → start_dev_server → get_browser_errors → open_browser.`,
-
-    stop_dev_server: `=== stop_dev_server — Arrêter le serveur de développement ===
-Usage : <tool>{"stop_dev_server": true}</tool>`,
-
-    get_browser_errors: `=== get_browser_errors — Lire les erreurs JS du navigateur ===
-Usage : <tool>{"get_browser_errors": true}</tool>
-• Retourne les erreurs console.error, window.onerror et promesses rejetées capturées.
-• Appelle après open_browser pour détecter les bugs JS avant de confirmer à l'utilisateur.`,
-
-    get_dev_server_info: `=== get_dev_server_info — Statut du serveur dev ===
-Usage : <tool>{"get_dev_server_info": true}</tool>
-• Retourne : statut (actif/arrêté), port, dossier servi.`,
-
-    save_image: `=== save_image — Sauvegarder une image base64 ===
-Usage : <tool>{"save_image": "data:image/png;base64,...", "filename": "mon-image.png"}</tool>
-• filename est optionnel (auto-généré si absent).
-• Retourne : path, dataUrl, filename.
-• Pour afficher l'image dans le chat : ![description](dataUrl)`,
-
-    download_image: `=== download_image — Télécharger une image depuis une URL ===
-Usage : <tool>{"download_image": "https://example.com/photo.jpg", "filename": "photo.jpg"}</tool>
-• filename est optionnel.
-• Retourne : path, dataUrl, filename.`,
-
-    ask_user: `=== ask_user — Poser une question interactive ===
-Usage : <tool>{"ask_user": "Ta question ?", "options": ["Option A", "Option B"]}</tool>
-• options est optionnel — omets-le pour une réponse libre.
-• Utilise dans TOUS les modes (ask, plan, agent).
-• Utilise AVANT d'exécuter une action irréversible.`,
-
-    set_mode: `=== set_mode — Changer de mode ===
-Usage : <tool>{"set_mode": "ask"}</tool>  |  "plan"  |  "agent"
-• ask   : réponses texte uniquement, pas d'actions
-• plan  : explique avant chaque action, confirme les actions risquées
-• agent : exécute librement tous les outils
-• set_mode: "ask" sert à revenir en mode conversation après une tâche.
-⚠️ NE PAS combiner set_mode + ask_user dans la même réponse — utilise ask_user directement.`,
-
-    request_agent_mode: `=== request_agent_mode — Demander le passage en mode Agent ===
-Usage : <tool>{"request_agent_mode": "Besoin d'exécuter X pour Y."}</tool>
-• Déclenche une demande de permission à l'utilisateur.
-• N'exécute aucune action — attend la confirmation.
-• Utilise uniquement en mode ask/plan si une action est nécessaire.`,
-
-    get_plan: `=== get_plan — Lire le plan PLAN.md ===
-Usage : <tool>{"get_plan": ""}</tool>
-• Retourne le contenu du fichier PLAN.md s'il existe.`,
-
-    save_plan: `=== save_plan — Sauvegarder / mettre à jour le plan ===
-Usage : <tool>{"save_plan": "# Tâche : Mon projet\\n\\n## État : EN COURS\\n\\n## Étapes\\n- [x] Étape 1\\n- [ ] Étape 2"}</tool>
-• Remplace le contenu de PLAN.md.
-• Mets à jour [x] et le Checkpoint à chaque étape complétée.`,
-
-    search_conversation: `=== search_conversation — Chercher dans les conversations passées ===
-Usage : <tool>{"search_conversation": "python"}</tool>
-  Tout parcourir : <tool>{"search_conversation": "*"}</tool>
-  Par id         : <tool>{"search_conversation": "#3"}</tool>`,
-
-    "context7-search": `=== context7-search — Trouver une bibliothèque dans Context7 ===
-Usage : <tool>{"context7-search": "react", "query": "hooks state management"}</tool>
-• Retourne les IDs Context7 (ex: /facebook/react).
-• Étape 1 avant context7-docs si l'ID est inconnu.`,
-
-    "context7-docs": `=== context7-docs — Obtenir la documentation officielle ===
-Usage : <tool>{"context7-docs": "/vercel/next.js", "query": "authentication middleware", "tokens": 4000}</tool>
-• context7-docs : ID Context7 exact (ex: /vercel/next.js, /tauri-apps/tauri)
-• query         : question précise en anglais
-• tokens        : budget optionnel (défaut 4000, max 10000)
-IDs courants : /facebook/react | /vercel/next.js | /tauri-apps/tauri | /supabase/supabase | /tailwindlabs/tailwindcss.com`,
-
-    create_mcp_server: `=== create_mcp_server — Créer un serveur MCP Node.js ===
-Usage : <tool>{"create_mcp_server": "nom-serveur", "description": "Ce que fait ce serveur", "content": "...code JS..."}</tool>
-• content = code Node.js COMPLET implémentant le protocole MCP (stdio JSON-RPC 2.0).
-• RÈGLE : utilise UNIQUEMENT des guillemets simples (') dans le code JS du content.
-• Après création : démarre avec start_mcp_server.`,
-
-    start_mcp_server: `=== start_mcp_server — Démarrer un serveur MCP ===
-Usage : <tool>{"start_mcp_server": "nom-serveur"}</tool>
-• Retourne la liste des outils exposés par le serveur.`,
-
-    call_mcp_tool: `=== call_mcp_tool — Appeler un outil d'un serveur MCP ===
-Usage : <tool>{"call_mcp_tool": "nom-serveur", "tool": "nom-outil", "args": "{\\"param\\": \\"valeur\\"}"}</tool>`,
-
-    list_mcp_servers: `=== list_mcp_servers — Lister les serveurs MCP ===
-Usage : <tool>{"list_mcp_servers": ""}</tool>`,
-
-    save_fact: `=== save_fact — Mémoriser un fait utilisateur ===
-⚠️ Ce n'est PAS un outil JSON. C'est une balise inline dans le texte de ta réponse.
-Format : <save_fact key="prénom" value="Jean"/>
-• Insère discrètement dans ta réponse quand l'utilisateur mentionne une info personnelle.
-• INTERDIT : <tool>{"save_fact": ...}</tool> — utilise TOUJOURS la balise inline.`,
-
-    get_tool_doc: `=== get_tool_doc — Obtenir la documentation d'un outil ===
-Usage : <tool>{"get_tool_doc": "write_file"}</tool>
-• Retourne la documentation complète de l'outil demandé.
-• Supporte la recherche partielle (ex: "terminal" retourne tous les outils terminal).
-• Utilise quand tu veux vérifier le format exact d'un outil avant de l'utiliser.`,
-
-    set_todo: `=== set_todo — Créer/remplacer la todo list ===
-Usage : <tool>{"set_todo": ["Étape 1 : créer index.html", "Étape 2 : ajouter CSS", "Étape 3 : tester"]}</tool>
-• Crée une liste de tâches visible au-dessus de la zone de saisie de l'utilisateur.
-• La liste ne s'affiche QUE si tu en crées une — n'en crée pas pour de simples réponses.
-• Utilise UNIQUEMENT pour les tâches multi-étapes (≥ 3 étapes) en mode agent.
-• Marque chaque tâche terminée avec check_todo au fur et à mesure.
-• Quand toutes sont cochées, la liste disparaît automatiquement.`,
-
-    check_todo: `=== check_todo — Marquer une tâche comme terminée ===
-Usage : <tool>{"check_todo": 0}</tool>   → marque la tâche n°0 (première)
-         <tool>{"check_todo": "all"}</tool> → marque TOUTES les tâches
-• L'index est 0-basé (première tâche = 0, deuxième = 1…).
-• Quand toutes les tâches sont cochées, la liste disparaît automatiquement après 1,5s.
-• Appelle check_todo IMMÉDIATEMENT après avoir accompli chaque étape.`,
-
-    save_project_structure: `=== save_project_structure — Mémoriser la structure du projet ===
-Usage : <tool>{"save_project_structure": "E:/monprojet/\\n├── index.html\\n├── style.css\\n└── script.js"}</tool>
-• Sauvegarde la structure dans la base de données, liée à la conversation.
-• Elle persiste : si l'utilisateur reprend la conversation plus tard, la structure est rechargée.
-• Elle est injectée AUTOMATIQUEMENT dans le contexte système à chaque message — tu n'as pas besoin de la relire.
-• Mets à jour après avoir créé/modifié des fichiers ou des dossiers importants.
-• IMPORTANT : appelle save_project_structure dès que tu crées ou modifies la structure d'un projet.`,
-
-    get_project_structure: `=== get_project_structure — Lire la structure mémorisée ===
-Usage : <tool>{"get_project_structure": ""}</tool>
-• Retourne la structure de projet actuellement mémorisée pour cette conversation.
-• Note : la structure est déjà injectée dans le contexte — utilise get_project_structure seulement si tu veux la relire explicitement.`,
-};
-
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// Documentation intÃƒÆ’Ã‚Â©grÃƒÆ’Ã‚Â©e de chaque outil ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â utilisÃƒÆ’Ã‚Â©e par get_tool_doc
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 interface UseToolCallingOptions {
     streaming: boolean;
     toolRunning: boolean;
@@ -494,15 +136,15 @@ export function useToolCalling({
     setPlanContent,
     planRef,
 }: UseToolCallingOptions): void {
-    // Tool calling : détecter <tool>{...}</tool> après fin du streaming
-    // Scanne TOUS les <tool> dans le message et les exécute en séquence avant de renvoyer au LLM.
+    // Tool calling : dÃƒÆ’Ã‚Â©tecter <tool>{...}</tool> aprÃƒÆ’Ã‚Â¨s fin du streaming
+    // Scanne TOUS les <tool> dans le message et les exÃƒÆ’Ã‚Â©cute en sÃƒÆ’Ã‚Â©quence avant de renvoyer au LLM.
     useEffect(() => {
         if (prevStreamingRef.current && !streaming && !toolRunning) {
             const lastMsg = messages[messages.length - 1];
             if (lastMsg?.role === "assistant" && lastMsg.content) {
                 const normalizedContent = normalizeToolTags(lastMsg.content);
 
-                // ── Format <patch_file path="...">SEARCH:\n...\nREPLACE:\n...</patch_file> ──
+                // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Format <patch_file path="...">SEARCH:\n...\nREPLACE:\n...</patch_file> ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                 const pfTagMatches = [
                     ...normalizedContent.matchAll(/<patch_file\s+path="([^"]+)">([\s\S]*?)<\/patch_file>/g),
                 ];
@@ -532,15 +174,15 @@ export function useToolCalling({
                                 lastToolWasErrorRef.current = true;
                                 const missingPart = !searchMatch ? "SEARCH" : "REPLACE";
                                 results.push(
-                                    `✗ ${filePath} : bloc ${missingPart} manquant dans <patch_file>.\n` +
-                                        `⚠️ Format obligatoire — exemple correct :\n` +
+                                    `ÃƒÂ¢Ã…â€œÃ¢â‚¬â€ ${filePath} : bloc ${missingPart} manquant dans <patch_file>.\n` +
+                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Format obligatoire ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â exemple correct :\n` +
                                         `<patch_file path="${filePath}">\n` +
                                         `SEARCH:\n` +
-                                        `texte exact à trouver (copié mot pour mot depuis le fichier)\n` +
+                                        `texte exact ÃƒÆ’Ã‚Â  trouver (copiÃƒÆ’Ã‚Â© mot pour mot depuis le fichier)\n` +
                                         `REPLACE:\n` +
-                                        `nouveau texte à mettre à la place\n` +
+                                        `nouveau texte ÃƒÆ’Ã‚Â  mettre ÃƒÆ’Ã‚Â  la place\n` +
                                         `</patch_file>\n` +
-                                        `RÈGLE : N'utilise JAMAIS ce tag sans bloc REPLACE — même pour montrer un aperçu.`,
+                                        `RÃƒÆ’Ã‹â€ GLE : N'utilise JAMAIS ce tag sans bloc REPLACE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â mÃƒÆ’Ã‚Âªme pour montrer un aperÃƒÆ’Ã‚Â§u.`,
                                 );
                                 continue;
                             }
@@ -552,32 +194,32 @@ export function useToolCalling({
                                     { path: filePath, search, replace },
                                     20000,
                                 );
-                                results.push(`✓ ${r}`);
+                                results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ ${r}`);
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
-                                results.push(`✗ ${filePath} : ${err}`);
+                                results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬â€ ${filePath} : ${err}`);
                             }
                         }
-                        const allOk = results.every((r) => r.startsWith("✓"));
+                        const allOk = results.every((r) => r.startsWith("ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“"));
                         if (!allOk) lastToolWasErrorRef.current = true;
                         await sendPrompt(
-                            `[Résultats patch_file]\n${results.join("\n")}\n` +
+                            `[RÃƒÆ’Ã‚Â©sultats patch_file]\n${results.join("\n")}\n` +
                                 (allOk
-                                    ? `Patch(es) appliqué(s) avec succès.`
-                                    : `⛔ PATCH ÉCHOUÉ — PROTOCOLE OBLIGATOIRE :\n` +
+                                    ? `Patch(es) appliquÃƒÆ’Ã‚Â©(s) avec succÃƒÆ’Ã‚Â¨s.`
+                                    : `ÃƒÂ¢Ã¢â‚¬ÂºÃ¢â‚¬Â PATCH ÃƒÆ’Ã¢â‚¬Â°CHOUÃƒÆ’Ã¢â‚¬Â° ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â PROTOCOLE OBLIGATOIRE :\n` +
                                       `  1. Appelle read_file sur le fichier pour voir le texte EXACT\n` +
-                                      `  2. Compare caractère par caractère ton bloc SEARCH avec le texte réel\n` +
+                                      `  2. Compare caractÃƒÆ’Ã‚Â¨re par caractÃƒÆ’Ã‚Â¨re ton bloc SEARCH avec le texte rÃƒÆ’Ã‚Â©el\n` +
                                       `  3. Corrige le SEARCH et relance patch_file\n` +
-                                      `INTERDIT : basculer vers write_file pour réécrire le fichier — la capitulation est une erreur grave.\n` +
-                                      `INTERDIT : dire "le patching est un leurre" ou "je vais réécrire" — la cause est toujours un SEARCH incorrect.\n` +
-                                      `Ne fais RIEN d'autre avant que le patch soit appliqué avec succès.`),
+                                      `INTERDIT : basculer vers write_file pour rÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â©crire le fichier ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â la capitulation est une erreur grave.\n` +
+                                      `INTERDIT : dire "le patching est un leurre" ou "je vais rÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â©crire" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â la cause est toujours un SEARCH incorrect.\n` +
+                                      `Ne fais RIEN d'autre avant que le patch soit appliquÃƒÆ’Ã‚Â© avec succÃƒÆ’Ã‚Â¨s.`),
                             config,
                         );
                     })().finally(() => setToolRunning(false));
                     return;
                 }
 
-                // ── Format <write_file path="...">CONTENT</write_file> ────────────────
+                // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Format <write_file path="...">CONTENT</write_file> ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                 const wfTagMatches = [
                     ...normalizedContent.matchAll(/<write_file\s+path="([^"]+)">([\/\s\S]*?)<\/write_file>/g),
                 ];
@@ -605,14 +247,14 @@ export function useToolCalling({
                                     { path: filePath, content: fileContent },
                                     20000,
                                 );
-                                results.push(`✓ ${r}`);
+                                results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ ${r}`);
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
-                                results.push(`✗ ${filePath} : ${err}`);
+                                results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬â€ ${filePath} : ${err}`);
                             }
                         }
                         await sendPrompt(
-                            `[Fichiers écrits]\n${results.join("\n")}\n` +
+                            `[Fichiers ÃƒÆ’Ã‚Â©crits]\n${results.join("\n")}\n` +
                                 `PROCHAINE ACTION OBLIGATOIRE : appelle start_dev_server sur le dossier du projet.`,
                             config,
                         );
@@ -659,33 +301,33 @@ export function useToolCalling({
                         if (jsonParseErrorCountRef.current <= 2) {
                             if (isBatchRename) {
                                 errMsg =
-                                    `[Erreur batch_rename — JSON invalide ou trop long]\n` +
-                                    `Le JSON de ton batch_rename est mal formé (${parseError}).\n` +
-                                    `SOLUTION OBLIGATOIRE : Divise les renommages en 2 appels séparés de 15 fichiers max :\n` +
-                                    `Appel 1 → <tool>{"batch_rename": [{"from": "...", "to": "..."}, ...]}</tool>  ← 15 premiers\n` +
-                                    `Appel 2 → <tool>{"batch_rename": [{"from": "...", "to": "..."}, ...]}</tool>  ← 15 suivants\n` +
-                                    `⚠️ Format TABLEAU NATIF obligatoire — PAS de guillemets supplémentaires autour du tableau.\n` +
-                                    `⚠️ Aucun guillemet à échapper dans les chemins de fichiers.`;
+                                    `[Erreur batch_rename ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â JSON invalide ou trop long]\n` +
+                                    `Le JSON de ton batch_rename est mal formÃƒÆ’Ã‚Â© (${parseError}).\n` +
+                                    `SOLUTION OBLIGATOIRE : Divise les renommages en 2 appels sÃƒÆ’Ã‚Â©parÃƒÆ’Ã‚Â©s de 15 fichiers max :\n` +
+                                    `Appel 1 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ <tool>{"batch_rename": [{"from": "...", "to": "..."}, ...]}</tool>  ÃƒÂ¢Ã¢â‚¬Â Ã‚Â 15 premiers\n` +
+                                    `Appel 2 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ <tool>{"batch_rename": [{"from": "...", "to": "..."}, ...]}</tool>  ÃƒÂ¢Ã¢â‚¬Â Ã‚Â 15 suivants\n` +
+                                    `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Format TABLEAU NATIF obligatoire ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â PAS de guillemets supplÃƒÆ’Ã‚Â©mentaires autour du tableau.\n` +
+                                    `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Aucun guillemet ÃƒÆ’Ã‚Â  ÃƒÆ’Ã‚Â©chapper dans les chemins de fichiers.`;
                             } else if (isReadPdfBatch) {
                                 errMsg =
-                                    `[Erreur read_pdf_batch — JSON invalide]\n` +
-                                    `Le JSON est mal formé (${parseError}).\n` +
-                                    `SOLUTION : Utilise un tableau natif JSON (PAS une chaîne sérialisée) :\n` +
+                                    `[Erreur read_pdf_batch ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â JSON invalide]\n` +
+                                    `Le JSON est mal formÃƒÆ’Ã‚Â© (${parseError}).\n` +
+                                    `SOLUTION : Utilise un tableau natif JSON (PAS une chaÃƒÆ’Ã‚Â®ne sÃƒÆ’Ã‚Â©rialisÃƒÆ’Ã‚Â©e) :\n` +
                                     `<tool>{"read_pdf_batch": ["E:/chemin/fichier1.pdf", "E:/chemin/fichier2.pdf", ...]}</tool>\n` +
-                                    `⚠️ Maximum 30 chemins par appel. Si > 30 fichiers, fais 2 appels séparés.`;
+                                    `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Maximum 30 chemins par appel. Si > 30 fichiers, fais 2 appels sÃƒÆ’Ã‚Â©parÃƒÆ’Ã‚Â©s.`;
                             } else if (isWriteFile) {
                                 errMsg =
-                                    `[Erreur write_file — FORMAT TAG OBLIGATOIRE]\n` +
-                                    `ARRÊTE toute tentative JSON pour write_file. Utilise EXACTEMENT ce format (commence par < pas par {) :\n` +
+                                    `[Erreur write_file ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â FORMAT TAG OBLIGATOIRE]\n` +
+                                    `ARRÃƒÆ’Ã…Â TE toute tentative JSON pour write_file. Utilise EXACTEMENT ce format (commence par < pas par {) :\n` +
                                     `\n` +
                                     `<write_file path="D:/projetavenire/index.html">\n` +
                                     `<!DOCTYPE html>\n` +
                                     `<html>...contenu complet ici...</html>\n` +
                                     `</write_file>\n` +
                                     `\n` +
-                                    `⚠️ La balise DOIT commencer par le caractère < (chevron), PAS par { (accolade).\n` +
-                                    `⚠️ NE pas envelopper dans <tool>...</tool> — le format TAG est DIRECT, sans wrapper.\n` +
-                                    `Adapte le path avec le vrai chemin du fichier à créer.`;
+                                    `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â La balise DOIT commencer par le caractÃƒÆ’Ã‚Â¨re < (chevron), PAS par { (accolade).\n` +
+                                    `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â NE pas envelopper dans <tool>...</tool> ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â le format TAG est DIRECT, sans wrapper.\n` +
+                                    `Adapte le path avec le vrai chemin du fichier ÃƒÆ’Ã‚Â  crÃƒÆ’Ã‚Â©er.`;
                             } else {
                                 errMsg =
                                     `[Erreur JSON dans <tool>] Le JSON est invalide (${parseError}).\n` +
@@ -701,18 +343,18 @@ export function useToolCalling({
                             jsonParseErrorCountRef.current = 0;
                             if (isBatchRename) {
                                 errMsg =
-                                    `[Erreur batch_rename persistante — SPLIT OBLIGATOIRE]\n` +
-                                    `Impossible de parser le JSON. RÈGLE : max 10 fichiers par appel batch_rename.\n` +
-                                    `Génère autant d'appels <tool>{"batch_rename": [...]}</tool> que nécessaire (10 par appel).`;
+                                    `[Erreur batch_rename persistante ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â SPLIT OBLIGATOIRE]\n` +
+                                    `Impossible de parser le JSON. RÃƒÆ’Ã‹â€ GLE : max 10 fichiers par appel batch_rename.\n` +
+                                    `GÃƒÆ’Ã‚Â©nÃƒÆ’Ã‚Â¨re autant d'appels <tool>{"batch_rename": [...]}</tool> que nÃƒÆ’Ã‚Â©cessaire (10 par appel).`;
                             } else if (isReadPdfBatch) {
                                 errMsg =
-                                    `[Erreur read_pdf_batch persistante — SPLIT OBLIGATOIRE]\n` +
-                                    `Impossible de parser le JSON. Réduis à 10 chemins maximum par appel.\n` +
+                                    `[Erreur read_pdf_batch persistante ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â SPLIT OBLIGATOIRE]\n` +
+                                    `Impossible de parser le JSON. RÃƒÆ’Ã‚Â©duis ÃƒÆ’Ã‚Â  10 chemins maximum par appel.\n` +
                                     `<tool>{"read_pdf_batch": ["chemin1.pdf", ..., "chemin10.pdf"]}</tool>`;
                             } else if (isWriteFile) {
                                 errMsg =
-                                    `[ECHEC REPEATED write_file — FALLBACK CMD OBLIGATOIRE]\n` +
-                                    `Le format TAG n'a pas fonctionné. Ecris le fichier via PowerShell cmd à la place :\n` +
+                                    `[ECHEC REPEATED write_file ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â FALLBACK CMD OBLIGATOIRE]\n` +
+                                    `Le format TAG n'a pas fonctionnÃƒÆ’Ã‚Â©. Ecris le fichier via PowerShell cmd ÃƒÆ’Ã‚Â  la place :\n` +
                                     `\n` +
                                     `<tool>{"cmd": "New-Item -ItemType Directory -Force 'D:/projetavenire'; Set-Content -Path 'D:/projetavenire/index.html' -Encoding UTF8 -Value '<!DOCTYPE html><html><head><title>Page</title></head><body><h1>Pepe-Studio</h1></body></html>'"}</tool>\n` +
                                     `\n` +
@@ -758,17 +400,17 @@ export function useToolCalling({
                             if (!isError) return output;
                             return (
                                 output +
-                                `\n\n[⚠ AUTO-CRITIQUE] La sortie de "${toolName}" contient une erreur. ` +
-                                `Analyse la cause racine et applique un correctif IMMÉDIATEMENT ` +
+                                `\n\n[ÃƒÂ¢Ã…Â¡Ã‚Â  AUTO-CRITIQUE] La sortie de "${toolName}" contient une erreur. ` +
+                                `Analyse la cause racine et applique un correctif IMMÃƒÆ’Ã¢â‚¬Â°DIATEMENT ` +
                                 `(patch_skill / patch_file / cmd selon le contexte). ` +
-                                `Ne répète PAS la même action. Si c'est un skill, lis-le d'abord avec read_skill.`
+                                `Ne rÃƒÆ’Ã‚Â©pÃƒÆ’Ã‚Â¨te PAS la mÃƒÆ’Ã‚Âªme action. Si c'est un skill, lis-le d'abord avec read_skill.`
                             );
                         };
-                        // ── Détection de boucle : même tool call deux fois de suite ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ DÃƒÆ’Ã‚Â©tection de boucle : mÃƒÆ’Ã‚Âªme tool call deux fois de suite ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         const toolSignature = JSON.stringify(parsedTool);
                         if (toolSignature === lastToolSignatureRef.current && !lastToolWasErrorRef.current) {
                             await sendPrompt(
-                                `[Système] Action bloquée : tu viens d'exécuter exactement ce même outil. Stop la boucle et réponds directement à l'utilisateur.`,
+                                `[SystÃƒÆ’Ã‚Â¨me] Action bloquÃƒÆ’Ã‚Â©e : tu viens d'exÃƒÆ’Ã‚Â©cuter exactement ce mÃƒÆ’Ã‚Âªme outil. Stop la boucle et rÃƒÆ’Ã‚Â©ponds directement ÃƒÆ’Ã‚Â  l'utilisateur.`,
                                 cfg,
                             );
                             return;
@@ -776,7 +418,7 @@ export function useToolCalling({
                         lastToolSignatureRef.current = toolSignature;
                         lastToolWasErrorRef.current = false;
 
-                        // ── ask_user (question interactive) ──────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ ask_user (question interactive) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.ask_user !== undefined) {
                             let options: string[] = [];
                             try {
@@ -789,25 +431,25 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── set_mode (l'IA change de mode) ───────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ set_mode (l'IA change de mode) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.set_mode !== undefined) {
                             const requested = parsedTool.set_mode as ChatMode;
                             if (requested === "agent" && chatModeRef.current !== "agent") {
                                 setPendingAgentPermission({
                                     reason:
                                         parsedTool.reason ??
-                                        "L'IA souhaite passer en mode Agent pour exécuter des actions.",
+                                        "L'IA souhaite passer en mode Agent pour exÃƒÆ’Ã‚Â©cuter des actions.",
                                     parsed: parsedTool,
                                     config: cfg,
                                 });
                                 return;
                             }
                             applyMode(requested);
-                            await sendPrompt(`[Système] Mode changé : ${requested}`, cfg);
+                            await sendPrompt(`[SystÃƒÆ’Ã‚Â¨me] Mode changÃƒÆ’Ã‚Â© : ${requested}`, cfg);
                             return;
                         }
 
-                        // ── request_agent_mode ───────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ request_agent_mode ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.request_agent_mode !== undefined) {
                             setPendingAgentPermission({
                                 reason: parsedTool.request_agent_mode || "L'IA souhaite passer en mode Agent.",
@@ -817,14 +459,14 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── get_tool_doc (lookup documentation — pas gatable) ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_tool_doc (lookup documentation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.get_tool_doc !== undefined) {
                             const query = String(parsedTool.get_tool_doc).toLowerCase().trim();
                             const exactMatch = TOOL_DOCS[query];
                             if (exactMatch) {
                                 await sendPrompt(`[Documentation : ${query}]\n\n${exactMatch}`, cfg);
                             } else {
-                                // Recherche partielle : tous les outils dont le nom contient la requête
+                                // Recherche partielle : tous les outils dont le nom contient la requÃƒÆ’Ã‚Âªte
                                 const matches = Object.entries(TOOL_DOCS).filter(([key]) =>
                                     key.toLowerCase().includes(query),
                                 );
@@ -833,15 +475,15 @@ export function useToolCalling({
                                 } else if (matches.length > 1) {
                                     const combined = matches
                                         .map(([, doc]) => doc)
-                                        .join("\n\n" + "─".repeat(60) + "\n\n");
+                                        .join("\n\n" + "ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬".repeat(60) + "\n\n");
                                     await sendPrompt(
-                                        `[Documentation — ${matches.length} outils trouvés pour "${parsedTool.get_tool_doc}"]\n\n${combined}`,
+                                        `[Documentation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${matches.length} outils trouvÃƒÆ’Ã‚Â©s pour "${parsedTool.get_tool_doc}"]\n\n${combined}`,
                                         cfg,
                                     );
                                 } else {
                                     const available = Object.keys(TOOL_DOCS).join(", ");
                                     await sendPrompt(
-                                        `[get_tool_doc] Aucun outil trouvé pour "${parsedTool.get_tool_doc}".\n\nOutils documentés :\n${available}`,
+                                        `[get_tool_doc] Aucun outil trouvÃƒÆ’Ã‚Â© pour "${parsedTool.get_tool_doc}".\n\nOutils documentÃƒÆ’Ã‚Â©s :\n${available}`,
                                         cfg,
                                     );
                                 }
@@ -849,7 +491,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── set_todo (IA crée/remplace la todo list) ─────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ set_todo (IA crÃƒÆ’Ã‚Â©e/remplace la todo list) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.set_todo !== undefined) {
                             try {
                                 let items: string[] = [];
@@ -866,11 +508,11 @@ export function useToolCalling({
                                 }
                                 if (items.length === 0) {
                                     setTodoItems([]);
-                                    await sendPrompt(`[Todo] Liste vidée.`, cfg);
+                                    await sendPrompt(`[Todo] Liste vidÃƒÆ’Ã‚Â©e.`, cfg);
                                 } else {
                                     setTodoItems(items.map((text) => ({ text, done: false })));
                                     await sendPrompt(
-                                        `[Todo] Liste créée avec ${items.length} tâche(s) :\n${items.map((t, i) => `  ${i + 1}. ${t}`).join("\n")}\nMarque chaque tâche terminée avec check_todo quand tu l'as accomplie.`,
+                                        `[Todo] Liste crÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â©e avec ${items.length} tÃƒÆ’Ã‚Â¢che(s) :\n${items.map((t, i) => `  ${i + 1}. ${t}`).join("\n")}\nMarque chaque tÃƒÆ’Ã‚Â¢che terminÃƒÆ’Ã‚Â©e avec check_todo quand tu l'as accomplie.`,
                                         cfg,
                                     );
                                 }
@@ -881,7 +523,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── check_todo (IA marque une/plusieurs tâches faites) ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ check_todo (IA marque une/plusieurs tÃƒÆ’Ã‚Â¢ches faites) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.check_todo !== undefined) {
                             const val = parsedTool.check_todo;
                             setTodoItems((prev) => {
@@ -893,13 +535,13 @@ export function useToolCalling({
                                 }
                             });
                             await sendPrompt(
-                                `[Todo] Tâche ${String(val) === "all" ? "toutes" : `n°${Number(val) + 1}`} marquée(s) ✓. CONTINUE IMMÉDIATEMENT avec la prochaine tâche sans attendre de confirmation utilisateur.`,
+                                `[Todo] TÃƒÆ’Ã‚Â¢che ${String(val) === "all" ? "toutes" : `nÃƒâ€šÃ‚Â°${Number(val) + 1}`} marquÃƒÆ’Ã‚Â©e(s) ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“. CONTINUE IMMÃƒÆ’Ã¢â‚¬Â°DIATEMENT avec la prochaine tÃƒÆ’Ã‚Â¢che sans attendre de confirmation utilisateur.`,
                                 cfg,
                             );
                             return;
                         }
 
-                        // ── save_project_structure (IA mémorise la structure) ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ save_project_structure (IA mÃƒÆ’Ã‚Â©morise la structure) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.save_project_structure !== undefined) {
                             const structure = String(parsedTool.save_project_structure);
                             setProjectStructure(structure);
@@ -909,27 +551,27 @@ export function useToolCalling({
                                 );
                             }
                             await sendPrompt(
-                                `[Structure projet sauvegardée] La structure est mémorisée pour cette conversation et sera rechargée à la prochaine reprise.`,
+                                `[Structure projet sauvegardÃƒÆ’Ã‚Â©e] La structure est mÃƒÆ’Ã‚Â©morisÃƒÆ’Ã‚Â©e pour cette conversation et sera rechargÃƒÆ’Ã‚Â©e ÃƒÆ’Ã‚Â  la prochaine reprise.`,
                                 cfg,
                             );
                             return;
                         }
 
-                        // ── get_project_structure (IA relit la structure) ─────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_project_structure (IA relit la structure) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.get_project_structure !== undefined) {
                             const current = projectStructureRef.current;
                             if (current.trim()) {
-                                await sendPrompt(`[Structure du projet mémorisée]\n\`\`\`\n${current}\n\`\`\``, cfg);
+                                await sendPrompt(`[Structure du projet mÃƒÆ’Ã‚Â©morisÃƒÆ’Ã‚Â©e]\n\`\`\`\n${current}\n\`\`\``, cfg);
                             } else {
                                 await sendPrompt(
-                                    `[Structure du projet] Aucune structure mémorisée pour cette conversation. Utilise save_project_structure pour en enregistrer une.`,
+                                    `[Structure du projet] Aucune structure mÃƒÆ’Ã‚Â©morisÃƒÆ’Ã‚Â©e pour cette conversation. Utilise save_project_structure pour en enregistrer une.`,
                                     cfg,
                                 );
                             }
                             return;
                         }
 
-                        // ── get_plan (lecture pure — pas gatable) ────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_plan (lecture pure ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.get_plan !== undefined) {
                             try {
                                 let content = planRef.current;
@@ -943,13 +585,13 @@ export function useToolCalling({
                                 }
                                 if (!content) {
                                     await sendPrompt(
-                                        `[PLAN.md] Aucun plan pour cette conversation. Crée-en un avec save_plan.`,
+                                        `[PLAN.md] Aucun plan pour cette conversation. CrÃƒÆ’Ã‚Â©e-en un avec save_plan.`,
                                         cfg,
                                     );
                                 } else {
                                     const firstLine = content.split("\n")[0] ?? "";
                                     await sendPrompt(
-                                        `[PLAN.md — Plan actuel (titre : ${firstLine})]\n\`\`\`markdown\n${content}\n\`\`\``,
+                                        `[PLAN.md ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Plan actuel (titre : ${firstLine})]\n\`\`\`markdown\n${content}\n\`\`\``,
                                         cfg,
                                     );
                                 }
@@ -960,7 +602,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── get_terminal_history (lecture pure — pas gatable) ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_terminal_history (lecture pure ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.get_terminal_history !== undefined) {
                             try {
                                 const entries = await invokeWithTimeout<
@@ -972,14 +614,14 @@ export function useToolCalling({
                                 );
                                 if (entries.length === 0) {
                                     await sendPrompt(
-                                        `[Historique terminal] Aucune commande exécutée dans ce terminal.`,
+                                        `[Historique terminal] Aucune commande exÃƒÆ’Ã‚Â©cutÃƒÆ’Ã‚Â©e dans ce terminal.`,
                                         cfg,
                                     );
                                 } else {
                                     const lines = entries
                                         .map(
                                             (e, i) =>
-                                                `[${i + 1}] ${e.timestamp}\n$ ${e.command}\n${e.output.slice(0, 500)}${e.output.length > 500 ? "\n...(tronqué)" : ""}`,
+                                                `[${i + 1}] ${e.timestamp}\n$ ${e.command}\n${e.output.slice(0, 500)}${e.output.length > 500 ? "\n...(tronquÃƒÆ’Ã‚Â©)" : ""}`,
                                         )
                                         .join("\n\n");
                                     await sendPrompt(
@@ -994,7 +636,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── get_dev_server_info (lecture pure — pas gatable) ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_dev_server_info (lecture pure ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.get_dev_server_info !== undefined) {
                             try {
                                 const info = await invokeWithTimeout<Record<string, string>>(
@@ -1002,7 +644,7 @@ export function useToolCalling({
                                     {},
                                     5000,
                                 );
-                                const status = info.running === "true" ? "🟢 Actif" : "🔴 Arrêté";
+                                const status = info.running === "true" ? "ÃƒÂ°Ã…Â¸Ã…Â¸Ã‚Â¢ Actif" : "ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â´ ArrÃƒÆ’Ã‚ÂªtÃƒÆ’Ã‚Â©";
                                 await sendPrompt(
                                     `[Serveur dev] Statut : ${status}\nPort : ${info.port || "(aucun)"}\nDossier : ${info.base_dir || "(aucun)"}`,
                                     cfg,
@@ -1014,7 +656,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── list_terminals (lecture pure — pas gatable) ───────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ list_terminals (lecture pure ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.list_terminals !== undefined) {
                             try {
                                 const list = await invokeWithTimeout<
@@ -1022,7 +664,7 @@ export function useToolCalling({
                                 >("list_terminals", {}, 5000);
                                 if (list.length === 0) {
                                     await sendPrompt(
-                                        "[Terminaux] Aucun terminal ouvert. Crée-en un avec create_terminal.",
+                                        "[Terminaux] Aucun terminal ouvert. CrÃƒÆ’Ã‚Â©e-en un avec create_terminal.",
                                         cfg,
                                     );
                                 } else {
@@ -1041,7 +683,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── read_file (lecture pure — pas gatable) ────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ read_file (lecture pure ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.read_file) {
                             try {
                                 const content = await invokeWithTimeout<string>(
@@ -1060,7 +702,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── list_folder_pdfs — liste les PDFs d'un dossier ────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ list_folder_pdfs ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â liste les PDFs d'un dossier ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.list_folder_pdfs) {
                             try {
                                 const recursive = parsedTool.recursive === "true";
@@ -1071,7 +713,7 @@ export function useToolCalling({
                                 );
                                 if (files.length === 0) {
                                     await sendPrompt(
-                                        `[list_folder_pdfs] Aucun fichier PDF trouvé dans : ${parsedTool.list_folder_pdfs}`,
+                                        `[list_folder_pdfs] Aucun fichier PDF trouvÃƒÆ’Ã‚Â© dans : ${parsedTool.list_folder_pdfs}`,
                                         cfg,
                                     );
                                 } else {
@@ -1087,7 +729,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── read_pdf — lit et extrait le texte d'un PDF sur disque ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ read_pdf ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â lit et extrait le texte d'un PDF sur disque ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.read_pdf) {
                             try {
                                 const base64 = await invokeWithTimeout<string>(
@@ -1098,7 +740,7 @@ export function useToolCalling({
                                 const pages = await extractPdfPagesFromBase64(base64);
                                 if (pages.length === 0) {
                                     await sendPrompt(
-                                        `[read_pdf] Le PDF "${parsedTool.read_pdf}" ne contient aucun texte extractible (PDF image ou protégé).`,
+                                        `[read_pdf] Le PDF "${parsedTool.read_pdf}" ne contient aucun texte extractible (PDF image ou protÃƒÆ’Ã‚Â©gÃƒÆ’Ã‚Â©).`,
                                         cfg,
                                     );
                                 } else {
@@ -1115,7 +757,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── read_pdf_brief — 1ère page uniquement, max 2000 car ────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ read_pdf_brief ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â 1ÃƒÆ’Ã‚Â¨re page uniquement, max 2000 car ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.read_pdf_brief) {
                             try {
                                 const base64 = await invokeWithTimeout<string>(
@@ -1140,12 +782,12 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── read_pdf_batch — lit N PDFs (1ère page) en un seul appel IPC ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ read_pdf_batch ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â lit N PDFs (1ÃƒÆ’Ã‚Â¨re page) en un seul appel IPC ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.read_pdf_batch) {
                             try {
                                 let paths: string[];
                                 if (Array.isArray(parsedTool.read_pdf_batch)) {
-                                    // L'IA a généré un tableau natif JSON
+                                    // L'IA a gÃƒÆ’Ã‚Â©nÃƒÆ’Ã‚Â©rÃƒÆ’Ã‚Â© un tableau natif JSON
                                     paths = parsedTool.read_pdf_batch as string[];
                                 } else {
                                     try {
@@ -1153,7 +795,7 @@ export function useToolCalling({
                                     } catch {
                                         lastToolWasErrorRef.current = true;
                                         await sendPrompt(
-                                            `[Erreur read_pdf_batch] JSON invalide. Format attendu : ["chemin1.pdf", "chemin2.pdf", ...]\nLes guillemets internes doivent être échappés avec \\\\.`,
+                                            `[Erreur read_pdf_batch] JSON invalide. Format attendu : ["chemin1.pdf", "chemin2.pdf", ...]\nLes guillemets internes doivent ÃƒÆ’Ã‚Âªtre ÃƒÆ’Ã‚Â©chappÃƒÆ’Ã‚Â©s avec \\\\.`,
                                             cfg,
                                         );
                                         return;
@@ -1185,7 +827,7 @@ export function useToolCalling({
                                     }
                                 }
                                 await sendPrompt(
-                                    `[read_pdf_batch] ${items.length} fichier(s) analysés :\n\n${parts.join("\n\n---\n\n")}`,
+                                    `[read_pdf_batch] ${items.length} fichier(s) analysÃƒÆ’Ã‚Â©s :\n\n${parts.join("\n\n---\n\n")}`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -1195,12 +837,12 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── batch_rename — renommer plusieurs fichiers en un appel ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ batch_rename ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â renommer plusieurs fichiers en un appel ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.batch_rename) {
                             try {
                                 let entries: Array<{ from: string; to: string }>;
                                 if (Array.isArray(parsedTool.batch_rename)) {
-                                    // L'IA a généré un tableau natif JSON
+                                    // L'IA a gÃƒÆ’Ã‚Â©nÃƒÆ’Ã‚Â©rÃƒÆ’Ã‚Â© un tableau natif JSON
                                     entries = parsedTool.batch_rename as Array<{ from: string; to: string }>;
                                 } else {
                                     try {
@@ -1208,7 +850,7 @@ export function useToolCalling({
                                     } catch {
                                         lastToolWasErrorRef.current = true;
                                         await sendPrompt(
-                                            `[Erreur batch_rename] JSON invalide. Format attendu : [{"from": "chemin/ancien.pdf", "to": "nouveau.pdf"}, ...]\nLes guillemets internes doivent être échappés avec \\\\.`,
+                                            `[Erreur batch_rename] JSON invalide. Format attendu : [{"from": "chemin/ancien.pdf", "to": "nouveau.pdf"}, ...]\nLes guillemets internes doivent ÃƒÆ’Ã‚Âªtre ÃƒÆ’Ã‚Â©chappÃƒÆ’Ã‚Â©s avec \\\\.`,
                                             cfg,
                                         );
                                         return;
@@ -1228,11 +870,11 @@ export function useToolCalling({
                                 const successCount = results.filter((r) => r.success).length;
                                 const lines = results.map((r) =>
                                     r.success
-                                        ? `  ✓ ${r.from.split("/").pop()} → ${r.to.split("/").pop()}`
-                                        : `  ✗ ${r.from.split("/").pop()} : ${r.error}`,
+                                        ? `  ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ ${r.from.split("/").pop()} ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ${r.to.split("/").pop()}`
+                                        : `  ÃƒÂ¢Ã…â€œÃ¢â‚¬â€ ${r.from.split("/").pop()} : ${r.error}`,
                                 );
                                 await sendPrompt(
-                                    `[batch_rename] ${successCount}/${results.length} fichiers renommés avec succès.\n${lines.join("\n")}`,
+                                    `[batch_rename] ${successCount}/${results.length} fichiers renommÃƒÆ’Ã‚Â©s avec succÃƒÆ’Ã‚Â¨s.\n${lines.join("\n")}`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -1242,7 +884,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── Garde de mode : outils d'action bloqués hors mode agent ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Garde de mode : outils d'action bloquÃƒÆ’Ã‚Â©s hors mode agent ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         const isActionTool = !!(
                             parsedTool.create_skill ||
                             parsedTool.run_skill ||
@@ -1286,7 +928,7 @@ export function useToolCalling({
                                 parsedTool.start_dev_server ??
                                 "action";
                             setPendingAgentPermission({
-                                reason: `Je veux exécuter : **${toolDesc}**\nAutoriser en passant en mode Agent ?`,
+                                reason: `Je veux exÃƒÆ’Ã‚Â©cuter : **${toolDesc}**\nAutoriser en passant en mode Agent ?`,
                                 parsed: parsedTool,
                                 config: cfg,
                             });
@@ -1307,14 +949,14 @@ export function useToolCalling({
                                 parsedTool.start_dev_server ??
                                 "action";
                             setPendingPlanConfirm({
-                                description: `**Plan** : je vais exécuter l'action suivante :\n\`${toolDesc}\`\n\nConfirmer l'exécution ?`,
+                                description: `**Plan** : je vais exÃƒÆ’Ã‚Â©cuter l'action suivante :\n\`${toolDesc}\`\n\nConfirmer l'exÃƒÆ’Ã‚Â©cution ?`,
                                 parsed: parsedTool,
                                 config: cfg,
                             });
                             return;
                         }
 
-                        // ── create_skill ─────────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ create_skill ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.create_skill) {
                             try {
                                 const result = await invokeWithTimeout<string>(
@@ -1345,21 +987,21 @@ export function useToolCalling({
                                               ? "Composite"
                                               : "PS1";
                                 await sendPrompt(
-                                    `[Skill ${skillTypeLabel} créé avec succès] "${parsedTool.create_skill}" est sauvegardé et prêt.\n${result}\n\n` +
-                                        `✅ Tu peux maintenant :\n` +
+                                    `[Skill ${skillTypeLabel} crÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â© avec succÃƒÆ’Ã‚Â¨s] "${parsedTool.create_skill}" est sauvegardÃƒÆ’Ã‚Â© et prÃƒÆ’Ã‚Âªt.\n${result}\n\n` +
+                                        `ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Tu peux maintenant :\n` +
                                         `  - Le tester avec \`run_skill\`\n` +
-                                        `  - Ou répondre à l'utilisateur que le skill est disponible\n` +
-                                        `⚠️ NE crée PAS ce skill à nouveau (il est déjà sauvegardé dans le fichier).`,
+                                        `  - Ou rÃƒÆ’Ã‚Â©pondre ÃƒÆ’Ã‚Â  l'utilisateur que le skill est disponible\n` +
+                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â NE crÃƒÆ’Ã‚Â©e PAS ce skill ÃƒÆ’Ã‚Â  nouveau (il est dÃƒÆ’Ã‚Â©jÃƒÆ’Ã‚Â  sauvegardÃƒÆ’Ã‚Â© dans le fichier).`,
                                     cfg,
                                 );
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur création skill]: ${err}`, cfg);
+                                await sendPrompt(`[Erreur crÃƒÆ’Ã‚Â©ation skill]: ${err}`, cfg);
                             }
                             return;
                         }
 
-                        // ── run_skill ─────────────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ run_skill ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.run_skill) {
                             try {
                                 const output = await invokeWithTimeout<string>(
@@ -1368,21 +1010,21 @@ export function useToolCalling({
                                     60000,
                                 );
                                 await sendPrompt(
-                                    `[Résultat du skill \`${parsedTool.run_skill}\`]\n\`\`\`\n${withAutoCritique(output, `run_skill:${parsedTool.run_skill}`)}\n\`\`\``,
+                                    `[RÃƒÆ’Ã‚Â©sultat du skill \`${parsedTool.run_skill}\`]\n\`\`\`\n${withAutoCritique(output, `run_skill:${parsedTool.run_skill}`)}\n\`\`\``,
                                     cfg,
                                 );
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
                                 await sendPrompt(
-                                    `[Erreur d'exécution du skill \`${parsedTool.run_skill}\`]\n\`\`\`\n${err}\n\`\`\`\n\n` +
-                                        `Pour corriger le skill, utilise create_skill avec le même nom et le contenu corrigé.`,
+                                    `[Erreur d'exÃƒÆ’Ã‚Â©cution du skill \`${parsedTool.run_skill}\`]\n\`\`\`\n${err}\n\`\`\`\n\n` +
+                                        `Pour corriger le skill, utilise create_skill avec le mÃƒÆ’Ã‚Âªme nom et le contenu corrigÃƒÆ’Ã‚Â©.`,
                                     cfg,
                                 );
                             }
                             return;
                         }
 
-                        // ── search_conversation ───────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ search_conversation ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.search_conversation !== undefined) {
                             try {
                                 const results = await invokeWithTimeout<
@@ -1390,7 +1032,7 @@ export function useToolCalling({
                                 >("search_conversation_messages", { query: parsedTool.search_conversation }, 20000);
                                 if (results.length === 0) {
                                     await sendPrompt(
-                                        `[Mémoire] Aucun message trouvé pour : "${parsedTool.search_conversation}"`,
+                                        `[MÃƒÆ’Ã‚Â©moire] Aucun message trouvÃƒÆ’Ã‚Â© pour : "${parsedTool.search_conversation}"`,
                                         cfg,
                                     );
                                 } else {
@@ -1405,24 +1047,24 @@ export function useToolCalling({
                                     }
                                     const parts: string[] = [];
                                     for (const [id, g] of groups) {
-                                        parts.push(`\n── Conv #${id} — ${g.day_label} ──`);
+                                        parts.push(`\nÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Conv #${id} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${g.day_label} ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬`);
                                         for (const msg of g.msgs) {
-                                            parts.push(`${msg.role === "user" ? "👤" : "🤖"} ${msg.content}`);
+                                            parts.push(`${msg.role === "user" ? "ÃƒÂ°Ã…Â¸Ã¢â‚¬ËœÃ‚Â¤" : "ÃƒÂ°Ã…Â¸Ã‚Â¤Ã¢â‚¬â€œ"} ${msg.content}`);
                                         }
                                     }
                                     await sendPrompt(
-                                        `[Mémoire — "${parsedTool.search_conversation}"]${parts.join("\n")}`,
+                                        `[MÃƒÆ’Ã‚Â©moire ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â "${parsedTool.search_conversation}"]${parts.join("\n")}`,
                                         cfg,
                                     );
                                 }
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur mémoire]: ${err}`, cfg);
+                                await sendPrompt(`[Erreur mÃƒÆ’Ã‚Â©moire]: ${err}`, cfg);
                             }
                             return;
                         }
 
-                        // ── save_plan (checkpoint / mise à jour du plan) ──────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ save_plan (checkpoint / mise ÃƒÆ’Ã‚Â  jour du plan) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.save_plan !== undefined) {
                             try {
                                 const content = String(parsedTool.save_plan);
@@ -1433,7 +1075,7 @@ export function useToolCalling({
                                         5000,
                                     );
                                     setPlanContent(content);
-                                    await sendPrompt(`[PLAN.md] Plan sauvegardé pour cette conversation.`, cfg);
+                                    await sendPrompt(`[PLAN.md] Plan sauvegardÃƒÆ’Ã‚Â© pour cette conversation.`, cfg);
                                 } else {
                                     await sendPrompt(`[Erreur save_plan] Aucune conversation active.`, cfg);
                                 }
@@ -1444,7 +1086,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── create_terminal ───────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ create_terminal ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.create_terminal !== undefined) {
                             onOpenTerminal?.();
                             try {
@@ -1454,14 +1096,14 @@ export function useToolCalling({
                                     10000,
                                 );
                                 await sendPrompt(
-                                    `[Terminal créé]\n` +
-                                        `⚠️ ID RÉEL (obligatoire pour toutes les commandes suivantes) : "${info.id}"\n` +
-                                        `Nom : "${info.name}" | Répertoire : ${info.cwd}\n` +
+                                    `[Terminal crÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â©]\n` +
+                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â ID RÃƒÆ’Ã¢â‚¬Â°EL (obligatoire pour toutes les commandes suivantes) : "${info.id}"\n` +
+                                        `Nom : "${info.name}" | RÃƒÆ’Ã‚Â©pertoire : ${info.cwd}\n` +
                                         `\n` +
                                         `Tu DOIS utiliser l'ID "${info.id}" (pas le nom) dans tous les appels suivants.\n` +
                                         `Commandes disponibles :\n` +
-                                        `  • terminal_exec         → commandes ponctuelles non-interactives\n` +
-                                        `  • terminal_start_interactive → SSH, REPL et tout processus interactif\n` +
+                                        `  ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ terminal_exec         ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ commandes ponctuelles non-interactives\n` +
+                                        `  ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ terminal_start_interactive ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ SSH, REPL et tout processus interactif\n` +
                                         `Exemple SSH :\n` +
                                         `  <tool>{"terminal_start_interactive": "ssh user@host", "terminal_id": "${info.id}"}</tool>`,
                                     cfg,
@@ -1473,13 +1115,13 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── terminal_exec ─────────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ terminal_exec ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.terminal_exec !== undefined) {
                             onOpenTerminal?.();
                             const tid = String(parsedTool.terminal_id ?? "");
                             if (!tid) {
                                 await sendPrompt(
-                                    "[Erreur terminal_exec] Paramètre terminal_id manquant. Utilise list_terminals pour voir les IDs disponibles.",
+                                    "[Erreur terminal_exec] ParamÃƒÆ’Ã‚Â¨tre terminal_id manquant. Utilise list_terminals pour voir les IDs disponibles.",
                                     cfg,
                                 );
                                 return;
@@ -1508,7 +1150,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── close_terminal ────────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ close_terminal ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.close_terminal !== undefined) {
                             try {
                                 const result = await invokeWithTimeout<string>(
@@ -1524,13 +1166,13 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── terminal_start_interactive ────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ terminal_start_interactive ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.terminal_start_interactive !== undefined) {
                             onOpenTerminal?.();
                             const tid = String(parsedTool.terminal_id ?? "");
                             if (!tid) {
                                 await sendPrompt(
-                                    "[Erreur terminal_start_interactive] Paramètre terminal_id manquant.\n" +
+                                    "[Erreur terminal_start_interactive] ParamÃƒÆ’Ã‚Â¨tre terminal_id manquant.\n" +
                                         "Flux correct :\n" +
                                         "  1. create_terminal pour obtenir un terminal_id (format: term-XXXXXXXXXX)\n" +
                                         "  2. terminal_start_interactive avec cet ID EXACT (ex: term-1776174852395)",
@@ -1538,9 +1180,9 @@ export function useToolCalling({
                                 );
                                 return;
                             }
-                            // Détecter si l'IA a passé un nom (sans "term-") au lieu d'un ID
+                            // DÃƒÆ’Ã‚Â©tecter si l'IA a passÃƒÆ’Ã‚Â© un nom (sans "term-") au lieu d'un ID
                             if (!tid.startsWith("term-")) {
-                                // Tenter de résoudre via list_terminals
+                                // Tenter de rÃƒÆ’Ã‚Â©soudre via list_terminals
                                 try {
                                     const tlist = await invokeWithTimeout<{ id: string; name: string }[]>(
                                         "list_terminals",
@@ -1553,7 +1195,7 @@ export function useToolCalling({
                                             `[Erreur terminal_start_interactive] "${tid}" est un NOM, pas un ID.\n` +
                                                 `L'ID doit commencer par "term-" (ex: term-1776174852395).\n` +
                                                 `Terminaux disponibles :\n` +
-                                                tlist.map((t) => `  • "${t.id}" (nom: ${t.name})`).join("\n"),
+                                                tlist.map((t) => `  ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ "${t.id}" (nom: ${t.name})`).join("\n"),
                                             cfg,
                                         );
                                         return;
@@ -1563,14 +1205,14 @@ export function useToolCalling({
                                 } catch {
                                     await sendPrompt(
                                         `[Erreur terminal_start_interactive] "${tid}" n'est pas un ID valide (doit commencer par "term-").\n` +
-                                            `Utilise create_terminal pour créer un terminal et récupère son ID.`,
+                                            `Utilise create_terminal pour crÃƒÆ’Ã‚Â©er un terminal et rÃƒÆ’Ã‚Â©cupÃƒÆ’Ã‚Â¨re son ID.`,
                                         cfg,
                                     );
                                     return;
                                 }
                             }
                             const realTid = String(parsedTool.terminal_id);
-                            // Réinitialiser le curseur de lecture pour cette nouvelle session
+                            // RÃƒÆ’Ã‚Â©initialiser le curseur de lecture pour cette nouvelle session
                             terminalReadCursors.delete(realTid);
                             try {
                                 await invokeWithTimeout<void>(
@@ -1579,13 +1221,13 @@ export function useToolCalling({
                                     8000,
                                 );
                                 await sendPrompt(
-                                    `[Processus interactif démarré dans le terminal "${realTid}"]\n` +
+                                    `[Processus interactif dÃƒÆ’Ã‚Â©marrÃƒÆ’Ã‚Â© dans le terminal "${realTid}"]\n` +
                                         `Commande : ${parsedTool.terminal_start_interactive}\n` +
-                                        `⏳ L'utilisateur entre son mot de passe directement dans le terminal xterm.js.\n` +
-                                        `✅ Dès que l'utilisateur confirme être connecté (ou que tu vois un prompt distant), envoie les commandes avec terminal_send_stdin.\n` +
-                                        `   La sortie de chaque commande te sera AUTOMATIQUEMENT retournée après ~2.5 s.\n` +
+                                        `ÃƒÂ¢Ã‚ÂÃ‚Â³ L'utilisateur entre son mot de passe directement dans le terminal xterm.js.\n` +
+                                        `ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ DÃƒÆ’Ã‚Â¨s que l'utilisateur confirme ÃƒÆ’Ã‚Âªtre connectÃƒÆ’Ã‚Â© (ou que tu vois un prompt distant), envoie les commandes avec terminal_send_stdin.\n` +
+                                        `   La sortie de chaque commande te sera AUTOMATIQUEMENT retournÃƒÆ’Ã‚Â©e aprÃƒÆ’Ã‚Â¨s ~2.5 s.\n` +
                                         `   Exemple : <tool>{"terminal_send_stdin": "ls -la\\n", "terminal_id": "${realTid}"}</tool>\n` +
-                                        `⚠️ Ne pas envoyer de commandes AVANT que l'utilisateur soit connecté (mot de passe saisi).`,
+                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Ne pas envoyer de commandes AVANT que l'utilisateur soit connectÃƒÆ’Ã‚Â© (mot de passe saisi).`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -1595,13 +1237,13 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── terminal_send_stdin ───────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ terminal_send_stdin ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.terminal_send_stdin !== undefined) {
                             onOpenTerminal?.();
                             const tid = String(parsedTool.terminal_id ?? "");
                             if (!tid) {
                                 await sendPrompt(
-                                    "[Erreur terminal_send_stdin] Paramètre terminal_id manquant.\n" +
+                                    "[Erreur terminal_send_stdin] ParamÃƒÆ’Ã‚Â¨tre terminal_id manquant.\n" +
                                         "Utilise list_terminals pour obtenir l'ID du terminal actif.",
                                     cfg,
                                 );
@@ -1618,20 +1260,20 @@ export function useToolCalling({
                                     5000,
                                 );
                                 const liveBefore = histBefore[histBefore.length - 1]?.output ?? "";
-                                // Supprimer les ANSI pour calculer la longueur texte réelle
+                                // Supprimer les ANSI pour calculer la longueur texte rÃƒÆ’Ã‚Â©elle
                                 cursorBefore = stripAnsi(liveBefore).length;
                             } catch {
-                                /* si ça échoue, on prend le curseur mémorisé */
+                                /* si ÃƒÆ’Ã‚Â§a ÃƒÆ’Ã‚Â©choue, on prend le curseur mÃƒÆ’Ã‚Â©morisÃƒÆ’Ã‚Â© */
                             }
 
                             try {
                                 // Envoyer la commande au PTY
                                 await invokeWithTimeout<void>("terminal_send_stdin", { terminalId: tid, input }, 5000);
 
-                                // Attendre la réponse (2.5 s max pour les commandes rapides)
+                                // Attendre la rÃƒÆ’Ã‚Â©ponse (2.5 s max pour les commandes rapides)
                                 await new Promise((r) => setTimeout(r, 2500));
 
-                                // Lire la sortie accumulée depuis le curseur
+                                // Lire la sortie accumulÃƒÆ’Ã‚Â©e depuis le curseur
                                 const histAfter = await invokeWithTimeout<{ command: string; output: string }[]>(
                                     "get_terminal_history",
                                     { terminalId: tid },
@@ -1641,24 +1283,24 @@ export function useToolCalling({
                                 const cleanOutput = stripAnsi(rawOutput);
                                 const newOutput = cleanOutput.slice(cursorBefore).trimStart();
 
-                                // Mettre à jour le curseur pour la prochaine commande
+                                // Mettre ÃƒÆ’Ã‚Â  jour le curseur pour la prochaine commande
                                 terminalReadCursors.set(tid, cleanOutput.length);
 
                                 const snippet =
                                     newOutput.length > 6000
-                                        ? newOutput.slice(0, 6000) + `\n…[tronqué — ${newOutput.length} chars au total]`
+                                        ? newOutput.slice(0, 6000) + `\nÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦[tronquÃƒÆ’Ã‚Â© ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${newOutput.length} chars au total]`
                                         : newOutput;
 
                                 if (snippet.trim()) {
                                     await sendPrompt(
-                                        `[Sortie du terminal "${tid}" — commande: ${JSON.stringify(input.trim())}]\n` +
+                                        `[Sortie du terminal "${tid}" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â commande: ${JSON.stringify(input.trim())}]\n` +
                                             `\`\`\`\n${snippet}\n\`\`\``,
                                         cfg,
                                     );
                                 } else {
                                     await sendPrompt(
-                                        `[Terminal "${tid}"] Commande envoyée (${JSON.stringify(input.trim())}), aucune sortie reçue en 2.5 s.\n` +
-                                            `La commande est peut-être encore en cours — tu peux réenvoyer terminal_send_stdin avec une commande vide ("\\n") pour rafraîchir.`,
+                                        `[Terminal "${tid}"] Commande envoyÃƒÆ’Ã‚Â©e (${JSON.stringify(input.trim())}), aucune sortie reÃƒÆ’Ã‚Â§ue en 2.5 s.\n` +
+                                            `La commande est peut-ÃƒÆ’Ã‚Âªtre encore en cours ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â tu peux rÃƒÆ’Ã‚Â©envoyer terminal_send_stdin avec une commande vide ("\\n") pour rafraÃƒÆ’Ã‚Â®chir.`,
                                         cfg,
                                     );
                                 }
@@ -1669,14 +1311,14 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── context7-search ───────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ context7-search ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool["context7-search"] !== undefined) {
                             try {
                                 const result = await searchLibrary(
                                     String(parsedTool["context7-search"]),
                                     parsedTool.query ?? "",
                                 );
-                                await sendPrompt(`[Context7 — Bibliothèques trouvées]\n${result}`, cfg);
+                                await sendPrompt(`[Context7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â BibliothÃƒÆ’Ã‚Â¨ques trouvÃƒÆ’Ã‚Â©es]\n${result}`, cfg);
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
                                 await sendPrompt(`[Erreur context7-search]: ${err}`, cfg);
@@ -1684,7 +1326,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── context7-docs ─────────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ context7-docs ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool["context7-docs"] !== undefined) {
                             try {
                                 const result = await queryDocs(
@@ -1692,7 +1334,7 @@ export function useToolCalling({
                                     parsedTool.query ?? "",
                                     Number(parsedTool.tokens ?? 4000),
                                 );
-                                await sendPrompt(`[Context7 — Documentation]\n${result}`, cfg);
+                                await sendPrompt(`[Context7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Documentation]\n${result}`, cfg);
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
                                 await sendPrompt(`[Erreur context7-docs]: ${err}`, cfg);
@@ -1700,7 +1342,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── http_request ──────────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ http_request ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.http_request) {
                             try {
                                 const result = await invokeWithTimeout<string>(
@@ -1714,7 +1356,7 @@ export function useToolCalling({
                                     30000,
                                 );
                                 await sendPrompt(
-                                    `[Réponse HTTP]\n\`\`\`\n${withAutoCritique(result, "http_request")}\n\`\`\``,
+                                    `[RÃƒÆ’Ã‚Â©ponse HTTP]\n\`\`\`\n${withAutoCritique(result, "http_request")}\n\`\`\``,
                                     cfg,
                                 );
                             } catch (err) {
@@ -1724,7 +1366,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── create_mcp_server ─────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ create_mcp_server ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.create_mcp_server) {
                             try {
                                 const result = await invokeWithTimeout<string>(
@@ -1737,18 +1379,18 @@ export function useToolCalling({
                                     20000,
                                 );
                                 await sendPrompt(
-                                    `[Serveur MCP créé] "${parsedTool.create_mcp_server}" sauvegardé.\n${result}\n\n` +
-                                        `Démarre-le maintenant avec start_mcp_server pour voir ses outils.`,
+                                    `[Serveur MCP crÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â©] "${parsedTool.create_mcp_server}" sauvegardÃƒÆ’Ã‚Â©.\n${result}\n\n` +
+                                        `DÃƒÆ’Ã‚Â©marre-le maintenant avec start_mcp_server pour voir ses outils.`,
                                     cfg,
                                 );
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur création serveur MCP]: ${err}`, cfg);
+                                await sendPrompt(`[Erreur crÃƒÆ’Ã‚Â©ation serveur MCP]: ${err}`, cfg);
                             }
                             return;
                         }
 
-                        // ── start_mcp_server ──────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ start_mcp_server ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.start_mcp_server) {
                             try {
                                 const tools = await invokeWithTimeout<{ name: string; description: string }[]>(
@@ -1758,17 +1400,17 @@ export function useToolCalling({
                                 );
                                 const toolList = tools.map((t) => `  - ${t.name}: ${t.description}`).join("\n");
                                 await sendPrompt(
-                                    `[Serveur MCP "${parsedTool.start_mcp_server}" démarré]\nOutils disponibles :\n${toolList || "  (aucun outil)"}`,
+                                    `[Serveur MCP "${parsedTool.start_mcp_server}" dÃƒÆ’Ã‚Â©marrÃƒÆ’Ã‚Â©]\nOutils disponibles :\n${toolList || "  (aucun outil)"}`,
                                     cfg,
                                 );
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur démarrage serveur MCP]: ${err}`, cfg);
+                                await sendPrompt(`[Erreur dÃƒÆ’Ã‚Â©marrage serveur MCP]: ${err}`, cfg);
                             }
                             return;
                         }
 
-                        // ── call_mcp_tool ─────────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ call_mcp_tool ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.call_mcp_tool) {
                             try {
                                 const result = await invokeWithTimeout<string>(
@@ -1781,7 +1423,7 @@ export function useToolCalling({
                                     20000,
                                 );
                                 await sendPrompt(
-                                    `[Résultat MCP tool "${parsedTool.tool}"]\n${withAutoCritique(result, `mcp:${parsedTool.tool}`)}`,
+                                    `[RÃƒÆ’Ã‚Â©sultat MCP tool "${parsedTool.tool}"]\n${withAutoCritique(result, `mcp:${parsedTool.tool}`)}`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -1791,7 +1433,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── list_mcp_servers ──────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ list_mcp_servers ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.list_mcp_servers !== undefined) {
                             try {
                                 const servers = await invokeWithTimeout<
@@ -1799,14 +1441,14 @@ export function useToolCalling({
                                 >("list_mcp_servers", {}, 20000);
                                 if (servers.length === 0) {
                                     await sendPrompt(
-                                        `[MCP] Aucun serveur MCP disponible. Crée-en un avec create_mcp_server.`,
+                                        `[MCP] Aucun serveur MCP disponible. CrÃƒÆ’Ã‚Â©e-en un avec create_mcp_server.`,
                                         cfg,
                                     );
                                 } else {
                                     const list = servers
                                         .map(
                                             (s) =>
-                                                `  - ${s.name} ${s.running ? "(en cours)" : "(arrêté)"}: ${s.description}\n    Outils: ${s.tools.map((t) => t.name).join(", ") || "démarrer pour voir"}`,
+                                                `  - ${s.name} ${s.running ? "(en cours)" : "(arrÃƒÆ’Ã‚ÂªtÃƒÆ’Ã‚Â©)"}: ${s.description}\n    Outils: ${s.tools.map((t) => t.name).join(", ") || "dÃƒÆ’Ã‚Â©marrer pour voir"}`,
                                         )
                                         .join("\n");
                                     await sendPrompt(`[Serveurs MCP disponibles]\n${list}`, cfg);
@@ -1818,7 +1460,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── read_skill ────────────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ read_skill ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.read_skill !== undefined) {
                             try {
                                 const content = await invokeWithTimeout<string>(
@@ -1827,7 +1469,7 @@ export function useToolCalling({
                                     10000,
                                 );
                                 await sendPrompt(
-                                    `[Contenu du skill \`${parsedTool.read_skill}\`]\n\`\`\`\n${content}\n\`\`\`\n\nAnalyse ce contenu et applique les corrections nécessaires avec create_skill.`,
+                                    `[Contenu du skill \`${parsedTool.read_skill}\`]\n\`\`\`\n${content}\n\`\`\`\n\nAnalyse ce contenu et applique les corrections nÃƒÆ’Ã‚Â©cessaires avec create_skill.`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -1837,7 +1479,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── patch_skill ───────────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ patch_skill ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.patch_skill !== undefined) {
                             try {
                                 const msg = await invokeWithTimeout<string>(
@@ -1857,7 +1499,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── write_file ────────────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ write_file ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.write_file) {
                             try {
                                 const rawContent = parsedTool.content ?? "";
@@ -1871,18 +1513,18 @@ export function useToolCalling({
                                     20000,
                                 );
                                 await sendPrompt(
-                                    `[Fichier écrit] ${result}\n` +
-                                        `PROCHAINE ACTION OBLIGATOIRE : si d'autres fichiers restent à écrire, appelle write_file immédiatement. Sinon (tous les fichiers sont prêts), appelle start_dev_server sur le dossier du projet. Ne génère PAS de texte d'explication entre deux outils.`,
+                                    `[Fichier ÃƒÆ’Ã‚Â©crit] ${result}\n` +
+                                        `PROCHAINE ACTION OBLIGATOIRE : si d'autres fichiers restent ÃƒÆ’Ã‚Â  ÃƒÆ’Ã‚Â©crire, appelle write_file immÃƒÆ’Ã‚Â©diatement. Sinon (tous les fichiers sont prÃƒÆ’Ã‚Âªts), appelle start_dev_server sur le dossier du projet. Ne gÃƒÆ’Ã‚Â©nÃƒÆ’Ã‚Â¨re PAS de texte d'explication entre deux outils.`,
                                     cfg,
                                 );
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur écriture fichier]: ${err}`, cfg);
+                                await sendPrompt(`[Erreur ÃƒÆ’Ã‚Â©criture fichier]: ${err}`, cfg);
                             }
                             return;
                         }
 
-                        // ── open_browser (ouvrir une URL dans le navigateur intégré) ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ open_browser (ouvrir une URL dans le navigateur intÃƒÆ’Ã‚Â©grÃƒÆ’Ã‚Â©) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.open_browser !== undefined) {
                             try {
                                 const targetUrl = parsedTool.open_browser as string;
@@ -1891,8 +1533,8 @@ export function useToolCalling({
                                 const errs = await invoke<string[]>("get_browser_errors").catch(() => [] as string[]);
                                 const errReport =
                                     errs.length > 0
-                                        ? `\nErreurs JS capturées :\n${errs.map((e, i) => `${i + 1}. ${e}`).join("\n")}`
-                                        : "\nAucune erreur JS capturée.";
+                                        ? `\nErreurs JS capturÃƒÆ’Ã‚Â©es :\n${errs.map((e, i) => `${i + 1}. ${e}`).join("\n")}`
+                                        : "\nAucune erreur JS capturÃƒÆ’Ã‚Â©e.";
                                 await sendPrompt(`[Navigateur] Page ouverte : ${targetUrl}${errReport}`, cfg);
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
@@ -1901,16 +1543,16 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── get_browser_errors (lire les erreurs JS capturées) ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_browser_errors (lire les erreurs JS capturÃƒÆ’Ã‚Â©es) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.get_browser_errors !== undefined) {
                             try {
                                 const errs = await invokeWithTimeout<string[]>("get_browser_errors", {}, 5000);
                                 const report =
                                     errs.length === 0
-                                        ? "Aucune erreur capturées."
+                                        ? "Aucune erreur capturÃƒÆ’Ã‚Â©es."
                                         : errs.map((e, i) => `${i + 1}. ${e}`).join("\n");
 
-                                // Détecter les erreurs pointant vers des fichiers EXTERNES (pas index.html)
+                                // DÃƒÆ’Ã‚Â©tecter les erreurs pointant vers des fichiers EXTERNES (pas index.html)
                                 let externalFilesNote = "";
                                 if (errs.length > 0) {
                                     const externalPaths = new Set<string>();
@@ -1923,14 +1565,14 @@ export function useToolCalling({
                                     if (externalPaths.size > 0) {
                                         const paths = [...externalPaths];
                                         externalFilesNote =
-                                            `\n\n⚠️ ATTENTION — FICHIERS EXTERNES DÉTECTÉS :\n` +
+                                            `\n\nÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â ATTENTION ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â FICHIERS EXTERNES DÃƒÆ’Ã¢â‚¬Â°TECTÃƒÆ’Ã¢â‚¬Â°S :\n` +
                                             `Ces erreurs NE viennent PAS de ton index.html, elles pointent vers :\n` +
                                             paths.map((p) => `  - ${p}`).join("\n") +
                                             `\nDIAGNOSTIC OBLIGATOIRE AVANT TOUT PATCH :\n` +
-                                            `  1. As-tu créé ces fichiers toi-même ? Si oui → lis-les avec read_file.\n` +
-                                            `  2. Si non → le serveur de dev charge un template par défaut. Dans ce cas :\n` +
-                                            `     → Utilise cmd pour lister le dossier du projet et identifier les fichiers parasites.\n` +
-                                            `     → Supprime ou ignore ces fichiers (ils ne font pas partie de ton projet).\n` +
+                                            `  1. As-tu crÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â© ces fichiers toi-mÃƒÆ’Ã‚Âªme ? Si oui ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ lis-les avec read_file.\n` +
+                                            `  2. Si non ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ le serveur de dev charge un template par dÃƒÆ’Ã‚Â©faut. Dans ce cas :\n` +
+                                            `     ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Utilise cmd pour lister le dossier du projet et identifier les fichiers parasites.\n` +
+                                            `     ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Supprime ou ignore ces fichiers (ils ne font pas partie de ton projet).\n` +
                                             `  3. NE JAMAIS patcher ton index.html pour corriger une erreur provenant d'un autre fichier.`;
                                     }
                                 }
@@ -1944,11 +1586,11 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── stop_dev_server ───────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ stop_dev_server ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.stop_dev_server !== undefined) {
                             try {
                                 await invokeWithTimeout<void>("stop_dev_server", {}, 5000);
-                                await sendPrompt(`[Serveur dev arrêté] Le serveur local a été stoppé.`, cfg);
+                                await sendPrompt(`[Serveur dev arrÃƒÆ’Ã‚ÂªtÃƒÆ’Ã‚Â©] Le serveur local a ÃƒÆ’Ã‚Â©tÃƒÆ’Ã‚Â© stoppÃƒÆ’Ã‚Â©.`, cfg);
                             } catch (err) {
                                 lastToolWasErrorRef.current = true;
                                 await sendPrompt(`[Erreur stop_dev_server]: ${err}`, cfg);
@@ -1956,7 +1598,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── start_dev_server (démarrer le serveur local) ──────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ start_dev_server (dÃƒÆ’Ã‚Â©marrer le serveur local) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.start_dev_server !== undefined) {
                             try {
                                 const dir = parsedTool.start_dev_server as string;
@@ -1970,7 +1612,7 @@ export function useToolCalling({
                                 shellOpen(devUrl).catch(() => {});
                                 await new Promise((r) => setTimeout(r, 1500));
                                 const errs = await invoke<string[]>("get_browser_errors").catch(() => [] as string[]);
-                                let errReport = "\nAucune erreur JS capturée au démarrage.";
+                                let errReport = "\nAucune erreur JS capturÃƒÆ’Ã‚Â©e au dÃƒÆ’Ã‚Â©marrage.";
                                 if (errs.length > 0) {
                                     const lines = errs.map((e, i) => `${i + 1}. ${e}`).join("\n");
                                     const externalPaths = new Set<string>();
@@ -1978,15 +1620,15 @@ export function useToolCalling({
                                         const m = e.match(/\(https?:\/\/[^/]+\/([^:)]+):\d+:\d+\)/);
                                         if (m && !m[1].endsWith("index.html")) externalPaths.add(m[1]);
                                     }
-                                    errReport = `\nErreurs JS capturées :\n${lines}`;
+                                    errReport = `\nErreurs JS capturÃƒÆ’Ã‚Â©es :\n${lines}`;
                                     if (externalPaths.size > 0) {
                                         errReport +=
-                                            `\n\n⚠️ Ces erreurs pointent vers des fichiers EXTERNES (${[...externalPaths].join(", ")}) — ` +
+                                            `\n\nÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Ces erreurs pointent vers des fichiers EXTERNES (${[...externalPaths].join(", ")}) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ` +
                                             `probablement un template du serveur. Utilise cmd pour lister le dossier et identifier les fichiers parasites.`;
                                     }
                                 }
                                 await sendPrompt(
-                                    `[Serveur dev démarré] ${devUrl} — dossier : ${dir}${errReport}\nProchaine action OBLIGATOIRE : appelle get_browser_errors pour valider le rendu, puis open_browser pour ouvrir la page.`,
+                                    `[Serveur dev dÃƒÆ’Ã‚Â©marrÃƒÆ’Ã‚Â©] ${devUrl} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â dossier : ${dir}${errReport}\nProchaine action OBLIGATOIRE : appelle get_browser_errors pour valider le rendu, puis open_browser pour ouvrir la page.`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -1996,7 +1638,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── save_image (sauvegarder une image base64 sur disque) ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ save_image (sauvegarder une image base64 sur disque) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.save_image !== undefined) {
                             try {
                                 const result = await invokeWithTimeout<{
@@ -2009,7 +1651,7 @@ export function useToolCalling({
                                     20000,
                                 );
                                 await sendPrompt(
-                                    `[Image sauvegardée] \`${result.path}\`\n![${result.filename}](${result.dataUrl})`,
+                                    `[Image sauvegardÃƒÆ’Ã‚Â©e] \`${result.path}\`\n![${result.filename}](${result.dataUrl})`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -2019,7 +1661,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── download_image (télécharger une image depuis une URL) ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ download_image (tÃƒÆ’Ã‚Â©lÃƒÆ’Ã‚Â©charger une image depuis une URL) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.download_image !== undefined) {
                             try {
                                 const result = await invokeWithTimeout<{
@@ -2032,7 +1674,7 @@ export function useToolCalling({
                                     30000,
                                 );
                                 await sendPrompt(
-                                    `[Image téléchargée] \`${result.path}\`\n![${result.filename}](${result.dataUrl})`,
+                                    `[Image tÃƒÆ’Ã‚Â©lÃƒÆ’Ã‚Â©chargÃƒÆ’Ã‚Â©e] \`${result.path}\`\n![${result.filename}](${result.dataUrl})`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -2042,13 +1684,13 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── search_web (recherche web réelle) ────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ search_web (recherche web rÃƒÆ’Ã‚Â©elle) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.search_web !== undefined) {
                             const swQuery = parsedTool.search_web as string;
                             const swSource = (parsedTool.source as string) || "duckduckgo";
                             const swLocale = (parsedTool.locale as string) || "fr";
                             if (!swQuery || typeof swQuery !== "string") {
-                                await sendPrompt(`[Erreur search_web]: paramètre query requis`, cfg);
+                                await sendPrompt(`[Erreur search_web]: paramÃƒÆ’Ã‚Â¨tre query requis`, cfg);
                                 return;
                             }
                             let swApiKey: string | null = null;
@@ -2068,10 +1710,10 @@ export function useToolCalling({
                                     20000,
                                 );
                                 const lines = results
-                                    .map((r, i) => `${i + 1}. **${r.title}**\n   ${r.snippet}\n   → ${r.url}`)
+                                    .map((r, i) => `${i + 1}. **${r.title}**\n   ${r.snippet}\n   ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ${r.url}`)
                                     .join("\n\n");
                                 await sendPrompt(
-                                    `[Résultats de recherche — source: ${swSource}]\nRequête: "${swQuery}"\n\n${lines}`,
+                                    `[RÃƒÆ’Ã‚Â©sultats de recherche ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â source: ${swSource}]\nRequÃƒÆ’Ã‚Âªte: "${swQuery}"\n\n${lines}`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -2081,12 +1723,12 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── scrape_url (extraire le contenu d'une page web) ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ scrape_url (extraire le contenu d'une page web) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.scrape_url !== undefined) {
                             const scrapeTarget = parsedTool.scrape_url as string;
                             const scrapeMode = (parsedTool.mode as string) || "static";
                             if (!scrapeTarget || typeof scrapeTarget !== "string") {
-                                await sendPrompt(`[Erreur scrape_url]: paramètre url requis`, cfg);
+                                await sendPrompt(`[Erreur scrape_url]: paramÃƒÆ’Ã‚Â¨tre url requis`, cfg);
                                 return;
                             }
                             try {
@@ -2118,7 +1760,7 @@ export function useToolCalling({
                                               .join("\n")
                                         : "";
                                 await sendPrompt(
-                                    `[Page scrapée — mode:${page.mode}]\n**URL :** ${page.url}\n**Titre :** ${page.title}\n**Description :** ${page.description}\n\n**Contenu :**\n${page.text}${headingsMd}${linksMd}`,
+                                    `[Page scrapÃƒÆ’Ã‚Â©e ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â mode:${page.mode}]\n**URL :** ${page.url}\n**Titre :** ${page.title}\n**Description :** ${page.description}\n\n**Contenu :**\n${page.text}${headingsMd}${linksMd}`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -2128,7 +1770,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── save_fact JSON ─────────────────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ save_fact JSON ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.save_fact !== undefined) {
                             try {
                                 const key = String(parsedTool.save_fact);
@@ -2142,13 +1784,13 @@ export function useToolCalling({
                                 /* silencieux */
                             }
                             await sendPrompt(
-                                `[Fait mémorisé] Poursuis ta réponse là où tu t'es arrêté — ne répète pas ce que tu as déjà dit.`,
+                                `[Fait mÃƒÆ’Ã‚Â©morisÃƒÆ’Ã‚Â©] Poursuis ta rÃƒÆ’Ã‚Â©ponse lÃƒÆ’Ã‚Â  oÃƒÆ’Ã‚Â¹ tu t'es arrÃƒÆ’Ã‚ÂªtÃƒÆ’Ã‚Â© ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ne rÃƒÆ’Ã‚Â©pÃƒÆ’Ã‚Â¨te pas ce que tu as dÃƒÆ’Ã‚Â©jÃƒÆ’Ã‚Â  dit.`,
                                 cfg,
                             );
                             return;
                         }
 
-                        // ── patch_file JSON (format alternatif — SEARCH/REPLACE comme clés) ──
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ patch_file JSON (format alternatif ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â SEARCH/REPLACE comme clÃƒÆ’Ã‚Â©s) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.patch_file !== undefined) {
                             const filePath = String(parsedTool.patch_file);
                             const searchStr = String(parsedTool.SEARCH ?? parsedTool.search ?? "");
@@ -2156,10 +1798,10 @@ export function useToolCalling({
                             if (!searchStr) {
                                 lastToolWasErrorRef.current = true;
                                 await sendPrompt(
-                                    `[Erreur patch_file] Paramètre SEARCH manquant.\n` +
-                                        `RAPPEL : utilise le format TAG <patch_file> — JAMAIS le format JSON pour patch_file :\n` +
+                                    `[Erreur patch_file] ParamÃƒÆ’Ã‚Â¨tre SEARCH manquant.\n` +
+                                        `RAPPEL : utilise le format TAG <patch_file> ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â JAMAIS le format JSON pour patch_file :\n` +
                                         `<patch_file path="${filePath}">SEARCH:\n` +
-                                        `<texte exact à trouver>\n` +
+                                        `<texte exact ÃƒÆ’Ã‚Â  trouver>\n` +
                                         `REPLACE:\n` +
                                         `<nouveau texte>\n` +
                                         `</patch_file>`,
@@ -2175,7 +1817,7 @@ export function useToolCalling({
                                 );
                                 await sendPrompt(
                                     `[patch_file] ${result}\n` +
-                                        `⚠️ RAPPEL : utilise le format TAG <patch_file path="..."> à l'avenir — pas le format JSON.`,
+                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â RAPPEL : utilise le format TAG <patch_file path="..."> ÃƒÆ’Ã‚Â  l'avenir ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas le format JSON.`,
                                     cfg,
                                 );
                             } catch (err) {
@@ -2189,7 +1831,7 @@ export function useToolCalling({
                             return;
                         }
 
-                        // ── cmd (commande ponctuelle) ─────────────────────────
+                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ cmd (commande ponctuelle) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         const cmd = parsedTool.cmd ?? parsedTool.command ?? "";
                         if (cmd.trim()) {
                             try {
@@ -2199,7 +1841,7 @@ export function useToolCalling({
                                     60000,
                                 );
                                 await sendPrompt(
-                                    `[Résultat de la commande \`${cmd}\`]\n\`\`\`\n${withAutoCritique(output, `cmd:${cmd}`)}\n\`\`\``,
+                                    `[RÃƒÆ’Ã‚Â©sultat de la commande \`${cmd}\`]\n\`\`\`\n${withAutoCritique(output, `cmd:${cmd}`)}\n\`\`\``,
                                     cfg,
                                 );
                             } catch (err) {
@@ -2207,11 +1849,11 @@ export function useToolCalling({
                                 await sendPrompt(`[Erreur commande \`${cmd}\`]: ${err}`, cfg);
                             }
                         } else {
-                            // Aucun outil reconnu dans le JSON parsé → forcer une réponse pour éviter le silence
+                            // Aucun outil reconnu dans le JSON parsÃƒÆ’Ã‚Â© ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ forcer une rÃƒÆ’Ã‚Â©ponse pour ÃƒÆ’Ã‚Â©viter le silence
                             const knownKeys = Object.keys(parsedTool).join(", ");
                             await sendPrompt(
-                                `[Système] Outil inconnu ou clé non reconnue : { ${knownKeys} }.\n` +
-                                    `Vérifie le nom de l'outil avec get_tool_doc ou consulte la liste des outils disponibles.`,
+                                `[SystÃƒÆ’Ã‚Â¨me] Outil inconnu ou clÃƒÆ’Ã‚Â© non reconnue : { ${knownKeys} }.\n` +
+                                    `VÃƒÆ’Ã‚Â©rifie le nom de l'outil avec get_tool_doc ou consulte la liste des outils disponibles.`,
                                 cfg,
                             );
                         }
@@ -2219,8 +1861,8 @@ export function useToolCalling({
                     // Exposer dispatch pour les boutons de confirmation
                     dispatchToolRef.current = dispatch;
 
-                    // Si plusieurs <tool> dans le même message, exécuter UNIQUEMENT le premier ici.
-                    // Exception : si ce sont tous des write_file consécutifs, les exécuter tous d'un coup.
+                    // Si plusieurs <tool> dans le mÃƒÆ’Ã‚Âªme message, exÃƒÆ’Ã‚Â©cuter UNIQUEMENT le premier ici.
+                    // Exception : si ce sont tous des write_file consÃƒÆ’Ã‚Â©cutifs, les exÃƒÆ’Ã‚Â©cuter tous d'un coup.
                     const remainingWriteFiles = allToolMatches.slice(1).reduce<Record<string, string>[]>((acc, m) => {
                         try {
                             const p = JSON.parse(sanitizeLlmJson(m[1]));
@@ -2232,7 +1874,7 @@ export function useToolCalling({
                     }, []);
 
                     if (parsed.write_file && remainingWriteFiles.length > 0) {
-                        // Mode batch : exécute tous les write_file du message en une fois
+                        // Mode batch : exÃƒÆ’Ã‚Â©cute tous les write_file du message en une fois
                         (async () => {
                             const results: string[] = [];
                             const allFiles = [parsed, ...remainingWriteFiles];
@@ -2248,13 +1890,13 @@ export function useToolCalling({
                                         { path: fileTool.write_file, content },
                                         20000,
                                     );
-                                    results.push(`✓ ${r}`);
+                                    results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ ${r}`);
                                 } catch (err) {
-                                    results.push(`✗ ${fileTool.write_file} : ${err}`);
+                                    results.push(`ÃƒÂ¢Ã…â€œÃ¢â‚¬â€ ${fileTool.write_file} : ${err}`);
                                 }
                             }
                             await sendPrompt(
-                                `[Fichiers écrits en batch]\n${results.join("\n")}\n` +
+                                `[Fichiers ÃƒÆ’Ã‚Â©crits en batch]\n${results.join("\n")}\n` +
                                     `PROCHAINE ACTION OBLIGATOIRE : appelle start_dev_server sur le dossier du projet.`,
                                 config,
                             );
@@ -2265,13 +1907,13 @@ export function useToolCalling({
                 }
             }
         }
-        // Sauvegarder la réponse assistant une fois le streaming terminé
+        // Sauvegarder la rÃƒÆ’Ã‚Â©ponse assistant une fois le streaming terminÃƒÆ’Ã‚Â©
         if (prevStreamingRef.current && !streaming) {
             const lastMsg = messages[messages.length - 1];
             if (lastMsg?.role === "assistant" && lastMsg.content && conversationId) {
                 let content = lastMsg.content;
 
-                // Extraction du titre généré par le LLM (<conv_title>...</conv_title>)
+                // Extraction du titre gÃƒÆ’Ã‚Â©nÃƒÆ’Ã‚Â©rÃƒÆ’Ã‚Â© par le LLM (<conv_title>...</conv_title>)
                 if (!convTitleSetRef.current) {
                     const titleMatch = content.match(/<conv_title>([\s\S]*?)<\/conv_title>/i);
                     if (titleMatch) {
@@ -2306,7 +1948,7 @@ export function useToolCalling({
                     invoke("save_message", { conversationId, role: "assistant", content }).catch(() => {});
                 }
 
-                // Détection et application automatique des blocs patch (FILE/SEARCH/REPLACE)
+                // DÃƒÆ’Ã‚Â©tection et application automatique des blocs patch (FILE/SEARCH/REPLACE)
                 if (hasPatchBlocks(content)) {
                     setPatchResults(null);
                     applyAllPatches(content).then((results) => {
@@ -2332,7 +1974,7 @@ export function useToolCalling({
             }
         }
         prevStreamingRef.current = streaming;
-        // speakText est stable (défini dans le même scope), ttsEnabled intentionnellement exclu pour éviter double-lecture
+        // speakText est stable (dÃƒÆ’Ã‚Â©fini dans le mÃƒÆ’Ã‚Âªme scope), ttsEnabled intentionnellement exclu pour ÃƒÆ’Ã‚Â©viter double-lecture
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [streaming, messages]);
 }

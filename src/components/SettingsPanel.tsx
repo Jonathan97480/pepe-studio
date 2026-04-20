@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useModelSettings } from "../context/ModelSettingsContext";
+import { useModelSettings, type TurboQuantType } from "../context/ModelSettingsContext";
 import { CONTEXT7_STORAGE_KEY } from "../tools/Context7Client";
 import { BRAVE_SEARCH_KEY, SERPER_SEARCH_KEY, TAVILY_SEARCH_KEY } from "../tools/SearchWeb";
 
@@ -69,7 +69,7 @@ export default function SettingsPanel() {
                         <p className="font-medium">Cache KV quantifié</p>
                         <p className="text-xs text-slate-400">Compresse les clés et valeurs d'attention pour réduire l'usage mémoire.</p>
                     </div>
-                    <select value={turboQuant} onChange={(e) => setTurboQuant(e.target.value as any)}
+                    <select value={turboQuant} onChange={(e) => setTurboQuant(e.target.value as TurboQuantType)}
                         className="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-white outline-none transition focus:border-blue-400">
                         <option value="none">Aucun</option>
                         <option value="q8_0">q8_0 — recommandé (8 bits K+V)</option>

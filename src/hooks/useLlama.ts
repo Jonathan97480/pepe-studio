@@ -3,12 +3,24 @@ import { invoke as apiInvoke } from "@tauri-apps/api/tauri";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { buildLlamaArgs, LlamaLaunchConfig } from "../lib/llamaWrapper";
 
-const safeInvoke = async <T = any>(cmd: string, args?: any): Promise<T> => {
+type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+type TauriWindowShape = {
+    __TAURI__?: {
+        invoke?: TauriInvoke;
+        core?: { invoke?: TauriInvoke };
+        tauri?: { invoke?: TauriInvoke };
+    };
+};
+type LlamaApiImagePart = { type: "image_url"; image_url: { url: string } };
+type LlamaApiTextPart = { type: "text"; text: string };
+type LlamaApiContent = string | Array<LlamaApiTextPart | LlamaApiImagePart>;
+
+const safeInvoke = async <T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
     if (typeof window === "undefined") {
         throw new Error("Tauri invoke unavailable. Assure-toi de lancer l'application depuis le runtime Tauri, pas depuis le navigateur web.");
     }
 
-    const tauri = (window as any).__TAURI__;
+    const tauri = (window as TauriWindowShape).__TAURI__;
     console.log("[useLlama] safeInvoke", {
         cmd,
         args,
@@ -46,7 +58,7 @@ const safeInvoke = async <T = any>(cmd: string, args?: any): Promise<T> => {
 export type LlamaMessage = {
     role: "user" | "assistant" | "system";
     content: string;       // contenu d'affichage (peut contenir 📎 nom de fichier)
-    apiContent?: any;      // contenu réel envoyé à l'API (inclut le texte des documents joints)
+    apiContent?: LlamaApiContent; // contenu réel envoyé à l'API (inclut le texte des documents joints)
     thinking?: string;
     thinkingDone?: boolean;
     thinkingCollapsed?: boolean;
@@ -416,7 +428,7 @@ export function useLlama() {
             unlistenError?.();
             unlistenUsage?.();
         };
-    }, []);
+    }, [debugLog, detectRepetitionLoop]);
 
     const loadModel = useCallback(async (config: LlamaLaunchConfig) => {
         setError(null);
@@ -426,10 +438,9 @@ export function useLlama() {
             const args = buildLlamaArgs(config);
             const result = await safeInvoke<string>("start_llama", { modelPath: config.modelPath, params: args });
             console.log("[useLlama] loadModel result", result);
-        } catch (e: any) {
+        } catch (e: unknown) {
             console.error("[useLlama] loadModel error", e);
-            const message = typeof e === "string" ? e : e?.message ?? JSON.stringify(e) ?? "Erreur lors du chargement du modèle";
-            setError(message);
+            setError(getErrorMessage(e, "Erreur lors du chargement du modèle"));
         } finally {
             setLoading(false);
         }
@@ -440,8 +451,8 @@ export function useLlama() {
         setLoading(true);
         try {
             await safeInvoke<string>("stop_llama");
-        } catch (e: any) {
-            setError(e?.message ?? "Erreur lors de l'arrêt du modèle");
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, "Erreur lors de l'arrêt du modèle"));
         } finally {
             setLoading(false);
         }
@@ -498,7 +509,7 @@ export function useLlama() {
 
         // Pré-calculer le contenu API du message courant pour le stocker dans l'historique
         // (fait ici pour être disponible avant la construction de textParts ci-dessous)
-        let pendingApiContent: any = null; // sera assigné après la construction de newUserMsg
+        let pendingApiContent: LlamaApiContent | null = null; // sera assigné après la construction de newUserMsg
 
         try {
             const contextWindow = params?.contextWindow ?? 4096;
@@ -527,13 +538,15 @@ export function useLlama() {
             const apiText = textParts.join("\n\n");
 
             // Contenu du nouveau message utilisateur (multimodal si images présentes)
-            const newUserMsgContent: any = imageAttachments.length > 0
+            const newUserMsgContent: LlamaApiContent = imageAttachments.length > 0
                 ? [
                     { type: "text", text: apiText },
-                    ...imageAttachments.map((a) => ({
-                        type: "image_url",
-                        image_url: { url: a.dataUrl },
-                    })),
+                    ...imageAttachments.map(
+                        (a): LlamaApiImagePart => ({
+                            type: "image_url",
+                            image_url: { url: a.dataUrl as string },
+                        }),
+                    ),
                 ]
                 : apiText;
 
@@ -542,7 +555,7 @@ export function useLlama() {
 
             // --- Troncature automatique du contexte (C) ---
             // Estimation multimodale : compte les images (base64) en plus du texte
-            const estimateTokens = (msgs: { role: string; content: any }[]) =>
+            const estimateTokens = (msgs: { role: string; content: LlamaApiContent }[]) =>
                 msgs.reduce((acc, m) => {
                     if (typeof m.content === "string") {
                         return acc + Math.ceil(m.content.length / 4) + 4;
@@ -607,12 +620,13 @@ export function useLlama() {
             // Stocker apiContent sur le message user pour que les échanges suivants
             // puissent relire le contenu du document dans l'historique
             if (pendingApiContent !== null) {
+                const apiContent = pendingApiContent;
                 setMessages((current) => {
                     const next = [...current];
                     // Le message user ajouté est à l'avant-dernière position (avant l'assistant vide)
                     const userIdx = next.length - 2;
                     if (userIdx >= 0 && next[userIdx]?.role === "user") {
-                        next[userIdx] = { ...next[userIdx], apiContent: pendingApiContent };
+                        next[userIdx] = { ...next[userIdx], apiContent };
                     }
                     return next;
                 });
@@ -639,15 +653,14 @@ export function useLlama() {
             });
             console.log("[useLlama] sendPrompt response", response);
             return response;
-        } catch (e: any) {
+        } catch (e: unknown) {
             console.error("[useLlama] sendPrompt error", e);
-            const message = typeof e === "string" ? e : e?.message ?? JSON.stringify(e) ?? "Erreur lors de l'envoi du prompt";
-            setError(message);
+            setError(getErrorMessage(e, "Erreur lors de l'envoi du prompt"));
             setStreaming(false);
             setCurrentPromptId(null);
             throw e;
         }
-    }, []);
+    }, [debugLog]);
 
     const deleteMessage = useCallback((index: number) => {
         setMessages((current) => {
@@ -747,3 +760,5 @@ export function useLlama() {
         updateLastAssistantContent,
     };
 }
+    const getErrorMessage = (error: unknown, fallback: string) =>
+        typeof error === "string" ? error : error instanceof Error ? error.message : JSON.stringify(error) ?? fallback;

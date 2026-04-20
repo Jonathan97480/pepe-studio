@@ -95,7 +95,7 @@ export default function SkillsPanel() {
         } catch (err) {
             setRunOutput((prev) => ({ ...prev, [name]: `[Erreur] ${err}` }));
         } finally {
-            setRunning(false as any);
+            setRunning(null);
         }
     };
 

@@ -4,7 +4,7 @@ import { defaultMcpManager } from "../tools/McpManager";
 export function useMCP() {
     const manager = useMemo(() => defaultMcpManager, []);
 
-    const execute = async (toolId: string, payload: any) => {
+    const execute = async (toolId: string, payload: unknown) => {
         return manager.execute(toolId, payload);
     };
 

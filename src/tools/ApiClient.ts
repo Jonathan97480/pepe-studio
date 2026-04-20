@@ -2,16 +2,16 @@ export type ApiClientRequest = {
     url: string;
     method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     headers?: Record<string, string>;
-    body?: any;
+    body?: unknown;
 };
 
-export type ApiClientResponse<T = any> = {
+export type ApiClientResponse<T = unknown> = {
     status: number;
     data: T;
     headers: Record<string, string>;
 };
 
-export async function apiClient<T = any>(request: ApiClientRequest): Promise<ApiClientResponse<T>> {
+export async function apiClient<T = unknown>(request: ApiClientRequest): Promise<ApiClientResponse<T>> {
     const response = await fetch(request.url, {
         method: request.method ?? "GET",
         headers: {

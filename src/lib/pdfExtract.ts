@@ -1,5 +1,7 @@
 export type PdfPage = { pageNum: number; text: string };
 
+type PdfTextItem = { str?: string };
+
 /**
  * Extrait le texte d'un fichier PDF page par page via pdfjs-dist.
  * Retourne un tableau de { pageNum, text } pour l'indexation RAG.
@@ -16,7 +18,7 @@ export async function extractPdfPages(file: File): Promise<PdfPage[]> {
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
         const text = content.items
-            .map((item: any) => ("str" in item ? item.str : ""))
+            .map((item) => ((item as PdfTextItem).str ?? ""))
             .join(" ")
             .replace(/  +/g, " ")
             .trim();
@@ -45,7 +47,7 @@ export async function extractPdfPagesFromBase64(base64: string): Promise<PdfPage
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
         const text = content.items
-            .map((item: any) => ("str" in item ? item.str : ""))
+            .map((item) => ((item as PdfTextItem).str ?? ""))
             .join(" ")
             .replace(/  +/g, " ")
             .trim();

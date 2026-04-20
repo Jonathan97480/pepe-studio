@@ -6,8 +6,8 @@ export type McpTool = {
     id: string;
     name: string;
     description: string;
-    schema: Record<string, any>;
-    execute: (payload: any) => Promise<any>;
+    schema: Record<string, unknown>;
+    execute: (payload: unknown) => Promise<unknown>;
 };
 
 export class McpManager {
@@ -21,7 +21,7 @@ export class McpManager {
         return Object.values(this.tools);
     }
 
-    async execute(id: string, payload: any) {
+    async execute(id: string, payload: unknown) {
         const tool = this.tools[id];
         if (!tool) {
             throw new Error(`Outil MCP inconnu : ${id}`);
@@ -45,8 +45,8 @@ defaultMcpManager.register({
         },
         required: ["query"],
     },
-    execute: async (payload: SearchWebQuery) => {
-        return searchWeb(payload);
+    execute: async (payload) => {
+        return searchWeb(payload as SearchWebQuery);
     },
 });
 
@@ -64,8 +64,8 @@ defaultMcpManager.register({
         },
         required: ["url"],
     },
-    execute: async (payload: ApiClientRequest) => {
-        return apiClient(payload);
+    execute: async (payload) => {
+        return apiClient(payload as ApiClientRequest);
     },
 });
 
@@ -81,8 +81,9 @@ defaultMcpManager.register({
         },
         required: ["libraryName"],
     },
-    execute: async (payload: { libraryName: string; query?: string }) => {
-        return searchLibrary(payload.libraryName, payload.query ?? "");
+    execute: async (payload) => {
+        const typedPayload = payload as { libraryName: string; query?: string };
+        return searchLibrary(typedPayload.libraryName, typedPayload.query ?? "");
     },
 });
 
@@ -99,7 +100,8 @@ defaultMcpManager.register({
         },
         required: ["libraryId", "query"],
     },
-    execute: async (payload: { libraryId: string; query: string; tokens?: number }) => {
-        return queryDocs(payload.libraryId, payload.query, payload.tokens);
+    execute: async (payload) => {
+        const typedPayload = payload as { libraryId: string; query: string; tokens?: number };
+        return queryDocs(typedPayload.libraryId, typedPayload.query, typedPayload.tokens);
     },
 });

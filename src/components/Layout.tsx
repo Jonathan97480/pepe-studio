@@ -9,10 +9,8 @@ import SettingsPanel from "./SettingsPanel";
 import SkillsPanel from "./SkillsPanel";
 import { useModelSettings } from "../context/ModelSettingsContext";
 import { SkillsProvider } from "../context/SkillsContext";
-import BrowserPanel from "./BrowserPanel";
-import TerminalPanel from "./TerminalPanel";
 import McpPanel from "./McpPanel";
-import FloatingWindow from "./FloatingWindow";
+import WorkspaceWindows from "./WorkspaceWindows";
 
 const navItems = [
     { label: "Chat", icon: "💬" },
@@ -180,47 +178,16 @@ export default function Layout() {
                     </div>
                 </main>
 
-                {/* ── Fenêtres flottantes navigateur & terminal ── */}
-                <FloatingWindow
-                    title="Navigateur"
-                    icon="🌐"
-                    open={browserOpen}
-                    onClose={() => setBrowserOpen(false)}
-                    defaultWidth={960}
-                    defaultHeight={620}
-                >
-                    <BrowserPanel initialUrl={browserNav.url} navKey={browserNav.nav} />
-                </FloatingWindow>
-
-                <FloatingWindow
-                    title="Terminaux"
-                    icon="⌨️"
-                    open={terminalOpen}
-                    onClose={() => setTerminalOpen(false)}
-                    defaultWidth={820}
-                    defaultHeight={500}
-                    defaultX={40}
-                >
-                    <TerminalPanel />
-                </FloatingWindow>
-
-                {/* ── Boutons de toggle permanents (coin bas-droit) ── */}
-                <div className="fixed bottom-6 right-6 z-40 flex flex-col gap-2">
-                    <button
-                        onClick={() => setTerminalOpen((v) => !v)}
-                        title="Ouvrir / fermer les terminaux"
-                        className={`flex items-center gap-2 rounded-2xl border px-4 py-2 text-sm font-medium shadow-lg backdrop-blur-xl transition ${terminalOpen ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-300" : "border-white/10 bg-slate-950/80 text-slate-400 hover:border-emerald-400/30 hover:text-emerald-300"}`}
-                    >
-                        ⌨️ Terminaux
-                    </button>
-                    <button
-                        onClick={() => setBrowserOpen((v) => !v)}
-                        title="Ouvrir / fermer le navigateur"
-                        className={`flex items-center gap-2 rounded-2xl border px-4 py-2 text-sm font-medium shadow-lg backdrop-blur-xl transition ${browserOpen ? "border-blue-400/50 bg-blue-500/20 text-blue-300" : "border-white/10 bg-slate-950/80 text-slate-400 hover:border-blue-400/30 hover:text-blue-300"}`}
-                    >
-                        🌐 Navigateur
-                    </button>
-                </div>
+                <WorkspaceWindows
+                    browserOpen={browserOpen}
+                    onToggleBrowser={() => setBrowserOpen((value) => !value)}
+                    onCloseBrowser={() => setBrowserOpen(false)}
+                    browserUrl={browserNav.url}
+                    browserNavKey={browserNav.nav}
+                    terminalOpen={terminalOpen}
+                    onToggleTerminal={() => setTerminalOpen((value) => !value)}
+                    onCloseTerminal={() => setTerminalOpen(false)}
+                />
             </div>
         </SkillsProvider>
     );

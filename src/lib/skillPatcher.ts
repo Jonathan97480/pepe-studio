@@ -15,12 +15,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/tauri";
-
-export interface PatchBlock {
-    file: string;
-    search: string;
-    replace: string;
-}
+import { hasPatchBlocks, parsePatchBlocks, type PatchBlock } from "./patchParsing";
 
 export interface PatchResult {
     file: string;
@@ -40,34 +35,7 @@ export interface PatchResult {
  *
  * Les blocs peuvent se répéter dans le même message.
  */
-export function parsePatchBlocks(text: string): PatchBlock[] {
-    const blocks: PatchBlock[] = [];
-
-    // Sépare le texte en segments débutant par FILE:
-    const segments = text.split(/(?=^FILE:\s*\S)/im);
-
-    for (const segment of segments) {
-        const fileMatch = segment.match(/^FILE:\s*(.+)$/im);
-        if (!fileMatch) continue;
-
-        const file = fileMatch[1].trim();
-
-        // Cherche SEARCH: ... REPLACE: ...
-        const searchMatch = segment.match(/^SEARCH:\s*\n([\s\S]*?)(?=^REPLACE:\s*$)/im);
-        const replaceMatch = segment.match(/^REPLACE:\s*\n([\s\S]*?)(?=^FILE:|\s*$)/im);
-
-        if (!searchMatch || !replaceMatch) continue;
-
-        const search = searchMatch[1].replace(/\r\n/g, "\n").trimEnd();
-        const replace = replaceMatch[1].replace(/\r\n/g, "\n").trimEnd();
-
-        if (search.length === 0) continue;
-
-        blocks.push({ file, search, replace });
-    }
-
-    return blocks;
-}
+export { hasPatchBlocks, parsePatchBlocks };
 
 /**
  * Applique un seul bloc de patch via la commande Tauri `patch_skill`.
@@ -99,11 +67,3 @@ export async function applyAllPatches(aiResponse: string): Promise<PatchResult[]
     return Promise.all(blocks.map(applyPatch));
 }
 
-/**
- * Retourne true si la réponse IA contient au moins un bloc patch.
- */
-export function hasPatchBlocks(text: string): boolean {
-    return /^FILE:\s*\S/im.test(text) &&
-           /^SEARCH:\s*$/im.test(text) &&
-           /^REPLACE:\s*$/im.test(text);
-}

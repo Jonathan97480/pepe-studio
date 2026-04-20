@@ -112,8 +112,8 @@ export default function ModelsPanel() {
             const draft = getOrCreateDraft(path);
             await saveConfig({ ...draft, path }); // sauvegarder d'abord
             await setDefault(path);
-        } catch (e: any) {
-            setActionError(e?.message ?? String(e));
+        } catch (e: unknown) {
+            setActionError(getErrorMessage(e));
         }
     };
 
@@ -170,8 +170,8 @@ export default function ModelsPanel() {
             if (systemPromptOverride !== undefined) {
                 setSystemPrompt(systemPromptOverride);
             }
-        } catch (e: any) {
-            setActionError(e?.message ?? String(e));
+        } catch (e: unknown) {
+            setActionError(getErrorMessage(e));
         } finally {
             setActionLoading(null);
         }
@@ -190,8 +190,8 @@ export default function ModelsPanel() {
                 threads: cfg.threads,
             });
             setAutoDetectNotes((prev) => ({ ...prev, [path]: cfg.notes }));
-        } catch (e: any) {
-            setActionError(`Détection matériel échouée : ${e?.message ?? e}`);
+        } catch (e: unknown) {
+            setActionError(`Détection matériel échouée : ${getErrorMessage(e)}`);
         } finally {
             setAutoDetecting(null);
         }
@@ -204,8 +204,8 @@ export default function ModelsPanel() {
             await invoke("stop_llama");
             setIsModelLoaded(false);
             setLoadedModelPath(null);
-        } catch (e: any) {
-            setActionError(e?.message ?? String(e));
+        } catch (e: unknown) {
+            setActionError(getErrorMessage(e));
         } finally {
             setActionLoading(null);
         }
@@ -684,3 +684,4 @@ export default function ModelsPanel() {
         </div>
     );
 }
+    const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));

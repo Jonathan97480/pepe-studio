@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 type McpToolInfo = {
     name: string;
     description: string;
-    inputSchema: Record<string, any>;
+    inputSchema: Record<string, unknown>;
 };
 
 type McpServerInfo = {
@@ -122,8 +122,8 @@ export default function McpPanel() {
             setNewDesc("");
             setNewScript(DEFAULT_TEMPLATE);
             await refresh();
-        } catch (e: any) {
-            setCreateError(typeof e === "string" ? e : e?.message ?? String(e));
+        } catch (e: unknown) {
+            setCreateError(getErrorMessage(e));
         } finally {
             setCreating(false);
         }
@@ -153,11 +153,14 @@ export default function McpPanel() {
         }
     };
 
-    const handleOpenTest = (serverName: string, toolName: string, schema: Record<string, any>) => {
+    const handleOpenTest = (serverName: string, toolName: string, schema: Record<string, unknown>) => {
         setTestServer(serverName);
         setTestTool(toolName);
         // Pré-remplir les args avec les propriétés requises
-        const props = schema?.properties ?? {};
+        const props =
+            typeof schema.properties === "object" && schema.properties !== null
+                ? (schema.properties as Record<string, { description?: string }>)
+                : {};
         const example: Record<string, string> = {};
         for (const key of Object.keys(props)) {
             example[key] = props[key]?.description ?? "";
@@ -177,8 +180,8 @@ export default function McpPanel() {
                 argsJson: testArgs,
             });
             setTestResult(result);
-        } catch (e: any) {
-            setTestResult(`[Erreur] ${typeof e === "string" ? e : e?.message ?? String(e)}`);
+        } catch (e: unknown) {
+            setTestResult(`[Erreur] ${getErrorMessage(e)}`);
         } finally {
             setTesting(false);
         }
@@ -402,3 +405,4 @@ export default function McpPanel() {
         </div>
     );
 }
+    const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));

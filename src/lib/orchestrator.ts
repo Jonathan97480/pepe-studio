@@ -25,7 +25,7 @@ export type LlamaResponse = {
 
 export type ToolRequest = {
     type: "search" | "api" | "mcp";
-    payload: any;
+    payload: Record<string, unknown>;
 };
 
 import { defaultMcpManager } from "../tools/McpManager";
@@ -35,7 +35,7 @@ export type OrchestratorMessage =
     | { type: "tool"; data: ToolRequest };
 
 export interface Orchestrator {
-    send(msg: OrchestratorMessage): Promise<LlamaResponse | any>;
+    send(msg: OrchestratorMessage): Promise<LlamaResponse | unknown>;
     onStream?(cb: (partial: LlamaResponse) => void): void;
     /** Options de compression appliquées aux sorties d'outils */
     compressorOptions?: CompressorOptions;
@@ -44,9 +44,14 @@ export interface Orchestrator {
 export class OrchestratorImpl implements Orchestrator {
     compressorOptions: CompressorOptions = { tokenBudget: 1000 };
 
-    async send(msg: OrchestratorMessage): Promise<LlamaResponse | any> {
+    async send(msg: OrchestratorMessage): Promise<LlamaResponse | unknown> {
         if (msg.type === "tool") {
-            const toolId = msg.data.type === "search" ? "search-web" : msg.data.type === "api" ? "api-client" : msg.data.payload.toolId;
+            const toolId =
+                msg.data.type === "search"
+                    ? "search-web"
+                    : msg.data.type === "api"
+                      ? "api-client"
+                      : String(msg.data.payload.toolId ?? "");
             const raw = await defaultMcpManager.execute(toolId, msg.data.payload);
             // ── Pepe-Compressor : compression de la sortie d'outil ──
             const { compressed, metaTag, ratio, estimatedTokens } =

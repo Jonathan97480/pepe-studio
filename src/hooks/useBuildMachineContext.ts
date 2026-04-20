@@ -920,7 +920,7 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
         } catch {
             setIsContextReady(true); /* silencieux */
         }
-    }, [deepThinkingEnabled, isEnabled]);
+    }, [chatModeRef, deepThinkingEnabled, isEnabled]);
 
     return { machineContext, setMachineContext, isContextReady, setIsContextReady, buildMachineContext };
 }

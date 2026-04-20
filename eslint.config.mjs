@@ -5,7 +5,7 @@ import reactHooksPlugin from "eslint-plugin-react-hooks";
 /** @type {import("eslint").Linter.Config[]} */
 export default [
     {
-        files: ["src/**/*.{ts,tsx}"],
+        files: ["src/**/*.{ts,tsx}", "tests/**/*.ts"],
         languageOptions: {
             parser: tsParser,
             parserOptions: {

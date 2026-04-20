@@ -51,7 +51,9 @@ export function useAutoCompact({
         const pct = tokenUsage.used / (tokenUsage.limit || contextWindow);
         if (pct >= 0.7 && !hasAutoCompactedRef.current) {
             hasAutoCompactedRef.current = true; // éviter double-déclenchement
-            compactContext();
+            setTimeout(() => {
+                void compactContext();
+            }, 0);
         }
     }, [streaming, loading, tokenUsage, contextWindow, compactContext]);
 
