@@ -14,7 +14,10 @@
   },
   "include": [
     "tests/**/*.ts",
+    "src/lib/toolCoreHandlers.ts",
     "src/lib/toolParsing.ts",
-    "src/lib/patchParsing.ts"
+    "src/lib/patchParsing.ts",
+    "src/lib/toolDispatchUtils.ts",
+    "src/lib/toolDocs.ts"
   ]
 }
