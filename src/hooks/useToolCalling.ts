@@ -4,8 +4,25 @@ import { open as shellOpen } from "@tauri-apps/api/shell";
 import { searchLibrary, queryDocs } from "../tools/Context7Client";
 import { hasPatchBlocks, applyAllPatches, type PatchResult } from "../lib/skillPatcher";
 import { normalizeToolTags, sanitizeLlmJson, extractWriteFileTool, invokeWithTimeout } from "../lib/chatUtils";
-import { extractPdfPagesFromBase64 } from "../lib/pdfExtract";
-import { TOOL_DOCS } from "../lib/toolDocs";
+import { describeTool, isActionTool, resolveToolDoc } from "../lib/toolDispatchUtils";
+import {
+    handleBatchRename,
+    handleListFolderPdfs,
+    handleReadFile,
+    handleReadPdf,
+    handleReadPdfBatch,
+    handleReadPdfBrief,
+} from "../lib/toolFileHandlers";
+import {
+    handleCheckTodo,
+    handleGetDevServerInfo,
+    handleGetPlan,
+    handleGetProjectStructure,
+    handleGetTerminalHistory,
+    handleListTerminals,
+    handleSaveProjectStructure,
+    handleSetTodo,
+} from "../lib/toolStateHandlers";
 import type { LlamaMessage, Attachment } from "./useLlama";
 import type { LlamaLaunchConfig } from "../lib/llamaWrapper";
 import type { TurboQuantType } from "../context/ModelSettingsContext";
@@ -461,472 +478,135 @@ export function useToolCalling({
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_tool_doc (lookup documentation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (parsedTool.get_tool_doc !== undefined) {
-                            const query = String(parsedTool.get_tool_doc).toLowerCase().trim();
-                            const exactMatch = TOOL_DOCS[query];
-                            if (exactMatch) {
-                                await sendPrompt(`[Documentation : ${query}]\n\n${exactMatch}`, cfg);
-                            } else {
-                                // Recherche partielle : tous les outils dont le nom contient la requÃƒÆ’Ã‚Âªte
-                                const matches = Object.entries(TOOL_DOCS).filter(([key]) =>
-                                    key.toLowerCase().includes(query),
-                                );
-                                if (matches.length === 1) {
-                                    await sendPrompt(`[Documentation : ${matches[0][0]}]\n\n${matches[0][1]}`, cfg);
-                                } else if (matches.length > 1) {
-                                    const combined = matches
-                                        .map(([, doc]) => doc)
-                                        .join("\n\n" + "ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬".repeat(60) + "\n\n");
-                                    await sendPrompt(
-                                        `[Documentation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${matches.length} outils trouvÃƒÆ’Ã‚Â©s pour "${parsedTool.get_tool_doc}"]\n\n${combined}`,
-                                        cfg,
-                                    );
-                                } else {
-                                    const available = Object.keys(TOOL_DOCS).join(", ");
-                                    await sendPrompt(
-                                        `[get_tool_doc] Aucun outil trouvÃƒÆ’Ã‚Â© pour "${parsedTool.get_tool_doc}".\n\nOutils documentÃƒÆ’Ã‚Â©s :\n${available}`,
-                                        cfg,
-                                    );
-                                }
-                            }
+                            const doc = resolveToolDoc(parsedTool.get_tool_doc);
+                            await sendPrompt(`${doc.title}\n\n${doc.body}`, cfg);
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ set_todo (IA crÃƒÆ’Ã‚Â©e/remplace la todo list) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.set_todo !== undefined) {
-                            try {
-                                let items: string[] = [];
-                                const raw = parsedTool.set_todo;
-                                if (Array.isArray(raw)) {
-                                    items = raw.map(String);
-                                } else if (typeof raw === "string") {
-                                    try {
-                                        const parsed = JSON.parse(raw);
-                                        items = Array.isArray(parsed) ? parsed.map(String) : [raw];
-                                    } catch {
-                                        items = [raw];
-                                    }
-                                }
-                                if (items.length === 0) {
-                                    setTodoItems([]);
-                                    await sendPrompt(`[Todo] Liste vidÃƒÆ’Ã‚Â©e.`, cfg);
-                                } else {
-                                    setTodoItems(items.map((text) => ({ text, done: false })));
-                                    await sendPrompt(
-                                        `[Todo] Liste crÃƒÆ’Ã‚Â©ÃƒÆ’Ã‚Â©e avec ${items.length} tÃƒÆ’Ã‚Â¢che(s) :\n${items.map((t, i) => `  ${i + 1}. ${t}`).join("\n")}\nMarque chaque tÃƒÆ’Ã‚Â¢che terminÃƒÆ’Ã‚Â©e avec check_todo quand tu l'as accomplie.`,
-                                        cfg,
-                                    );
-                                }
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur set_todo]: ${err}`, cfg);
-                            }
-                            return;
-                        }
-
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ check_todo (IA marque une/plusieurs tÃƒÆ’Ã‚Â¢ches faites) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.check_todo !== undefined) {
-                            const val = parsedTool.check_todo;
-                            setTodoItems((prev) => {
-                                if (String(val).toLowerCase() === "all") {
-                                    return prev.map((t) => ({ ...t, done: true }));
-                                } else {
-                                    const idx = Number(val);
-                                    return prev.map((t, i) => (i === idx ? { ...t, done: true } : t));
-                                }
-                            });
-                            await sendPrompt(
-                                `[Todo] TÃƒÆ’Ã‚Â¢che ${String(val) === "all" ? "toutes" : `nÃƒâ€šÃ‚Â°${Number(val) + 1}`} marquÃƒÆ’Ã‚Â©e(s) ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“. CONTINUE IMMÃƒÆ’Ã¢â‚¬Â°DIATEMENT avec la prochaine tÃƒÆ’Ã‚Â¢che sans attendre de confirmation utilisateur.`,
+                        if (
+                            await handleSetTodo({
+                                parsedTool,
                                 cfg,
-                            );
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                setTodoItems,
+                            })
+                        ) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ save_project_structure (IA mÃƒÆ’Ã‚Â©morise la structure) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.save_project_structure !== undefined) {
-                            const structure = String(parsedTool.save_project_structure);
-                            setProjectStructure(structure);
-                            if (conversationId) {
-                                invokeWithTimeout("save_project_structure", { conversationId, structure }, 5000).catch(
-                                    () => {},
-                                );
-                            }
-                            await sendPrompt(
-                                `[Structure projet sauvegardÃƒÆ’Ã‚Â©e] La structure est mÃƒÆ’Ã‚Â©morisÃƒÆ’Ã‚Â©e pour cette conversation et sera rechargÃƒÆ’Ã‚Â©e ÃƒÆ’Ã‚Â  la prochaine reprise.`,
+                        if (
+                            await handleCheckTodo({
+                                parsedTool,
                                 cfg,
-                            );
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                setTodoItems,
+                            })
+                        ) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_project_structure (IA relit la structure) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.get_project_structure !== undefined) {
-                            const current = projectStructureRef.current;
-                            if (current.trim()) {
-                                await sendPrompt(`[Structure du projet mÃƒÆ’Ã‚Â©morisÃƒÆ’Ã‚Â©e]\n\`\`\`\n${current}\n\`\`\``, cfg);
-                            } else {
-                                await sendPrompt(
-                                    `[Structure du projet] Aucune structure mÃƒÆ’Ã‚Â©morisÃƒÆ’Ã‚Â©e pour cette conversation. Utilise save_project_structure pour en enregistrer une.`,
-                                    cfg,
-                                );
-                            }
+                        if (
+                            await handleSaveProjectStructure({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                conversationId,
+                                setProjectStructure,
+                            })
+                        ) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_plan (lecture pure ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.get_plan !== undefined) {
-                            try {
-                                let content = planRef.current;
-                                if (!content && conversationId) {
-                                    content = await invokeWithTimeout<string>(
-                                        "get_conversation_plan",
-                                        { conversationId },
-                                        5000,
-                                    );
-                                    if (content) setPlanContent(content);
-                                }
-                                if (!content) {
-                                    await sendPrompt(
-                                        `[PLAN.md] Aucun plan pour cette conversation. CrÃƒÆ’Ã‚Â©e-en un avec save_plan.`,
-                                        cfg,
-                                    );
-                                } else {
-                                    const firstLine = content.split("\n")[0] ?? "";
-                                    await sendPrompt(
-                                        `[PLAN.md ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Plan actuel (titre : ${firstLine})]\n\`\`\`markdown\n${content}\n\`\`\``,
-                                        cfg,
-                                    );
-                                }
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur get_plan]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleGetProjectStructure({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                projectStructureRef,
+                            })
+                        ) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_terminal_history (lecture pure ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.get_terminal_history !== undefined) {
-                            try {
-                                const entries = await invokeWithTimeout<
-                                    { command: string; output: string; timestamp: string }[]
-                                >(
-                                    "get_terminal_history",
-                                    { terminalId: String(parsedTool.get_terminal_history) },
-                                    5000,
-                                );
-                                if (entries.length === 0) {
-                                    await sendPrompt(
-                                        `[Historique terminal] Aucune commande exÃƒÆ’Ã‚Â©cutÃƒÆ’Ã‚Â©e dans ce terminal.`,
-                                        cfg,
-                                    );
-                                } else {
-                                    const lines = entries
-                                        .map(
-                                            (e, i) =>
-                                                `[${i + 1}] ${e.timestamp}\n$ ${e.command}\n${e.output.slice(0, 500)}${e.output.length > 500 ? "\n...(tronquÃƒÆ’Ã‚Â©)" : ""}`,
-                                        )
-                                        .join("\n\n");
-                                    await sendPrompt(
-                                        `[Historique terminal \`${parsedTool.get_terminal_history}\`]\n${lines}`,
-                                        cfg,
-                                    );
-                                }
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur get_terminal_history]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleGetPlan({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                                conversationId,
+                                planRef,
+                                setPlanContent,
+                            })
+                        ) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ get_dev_server_info (lecture pure ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.get_dev_server_info !== undefined) {
-                            try {
-                                const info = await invokeWithTimeout<Record<string, string>>(
-                                    "get_dev_server_info",
-                                    {},
-                                    5000,
-                                );
-                                const status = info.running === "true" ? "ÃƒÂ°Ã…Â¸Ã…Â¸Ã‚Â¢ Actif" : "ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â´ ArrÃƒÆ’Ã‚ÂªtÃƒÆ’Ã‚Â©";
-                                await sendPrompt(
-                                    `[Serveur dev] Statut : ${status}\nPort : ${info.port || "(aucun)"}\nDossier : ${info.base_dir || "(aucun)"}`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur get_dev_server_info]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleGetTerminalHistory({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                            })
+                        ) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ list_terminals (lecture pure ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.list_terminals !== undefined) {
-                            try {
-                                const list = await invokeWithTimeout<
-                                    { id: string; name: string; cwd: string; entry_count: number }[]
-                                >("list_terminals", {}, 5000);
-                                if (list.length === 0) {
-                                    await sendPrompt(
-                                        "[Terminaux] Aucun terminal ouvert. CrÃƒÆ’Ã‚Â©e-en un avec create_terminal.",
-                                        cfg,
-                                    );
-                                } else {
-                                    const lines = list
-                                        .map(
-                                            (t) =>
-                                                `  - ${t.id}  "${t.name}"  |  ${t.cwd}  (${t.entry_count} cmd${t.entry_count !== 1 ? "s" : ""})`,
-                                        )
-                                        .join("\n");
-                                    await sendPrompt(`[Terminaux ouverts]\n${lines}`, cfg);
-                                }
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur list_terminals]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleGetDevServerInfo({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                            })
+                        ) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ read_file (lecture pure ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pas gatable) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.read_file) {
-                            try {
-                                const content = await invokeWithTimeout<string>(
-                                    "read_file_content",
-                                    { path: parsedTool.read_file },
-                                    15000,
-                                );
-                                await sendPrompt(
-                                    `[Contenu de ${parsedTool.read_file}]\n\`\`\`\n${content}\n\`\`\``,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur lecture fichier]: ${err}`, cfg);
-                            }
+                        if (
+                            await handleListTerminals({
+                                parsedTool,
+                                cfg,
+                                sendPrompt,
+                                lastToolWasErrorRef,
+                            })
+                        ) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ list_folder_pdfs ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â liste les PDFs d'un dossier ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.list_folder_pdfs) {
-                            try {
-                                const recursive = parsedTool.recursive === "true";
-                                const files = await invokeWithTimeout<string[]>(
-                                    "list_folder_pdfs",
-                                    { folder: parsedTool.list_folder_pdfs, recursive },
-                                    15000,
-                                );
-                                if (files.length === 0) {
-                                    await sendPrompt(
-                                        `[list_folder_pdfs] Aucun fichier PDF trouvÃƒÆ’Ã‚Â© dans : ${parsedTool.list_folder_pdfs}`,
-                                        cfg,
-                                    );
-                                } else {
-                                    await sendPrompt(
-                                        `[PDFs dans ${parsedTool.list_folder_pdfs}] ${files.length} fichier(s) :\n${files.map((f, i) => `  ${i + 1}. ${f}`).join("\n")}`,
-                                        cfg,
-                                    );
-                                }
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur list_folder_pdfs]: ${err}`, cfg);
-                            }
+                        if (await handleReadFile({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ read_pdf ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â lit et extrait le texte d'un PDF sur disque ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.read_pdf) {
-                            try {
-                                const base64 = await invokeWithTimeout<string>(
-                                    "read_pdf_bytes",
-                                    { path: parsedTool.read_pdf },
-                                    30000,
-                                );
-                                const pages = await extractPdfPagesFromBase64(base64);
-                                if (pages.length === 0) {
-                                    await sendPrompt(
-                                        `[read_pdf] Le PDF "${parsedTool.read_pdf}" ne contient aucun texte extractible (PDF image ou protÃƒÆ’Ã‚Â©gÃƒÆ’Ã‚Â©).`,
-                                        cfg,
-                                    );
-                                } else {
-                                    const text = pages.map((p) => `[Page ${p.pageNum}]\n${p.text}`).join("\n\n");
-                                    await sendPrompt(
-                                        `[Contenu PDF : ${parsedTool.read_pdf}] (${pages.length} page(s))\n\n${text}`,
-                                        cfg,
-                                    );
-                                }
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur read_pdf]: ${err}`, cfg);
-                            }
+                        if (await handleListFolderPdfs({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ read_pdf_brief ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â 1ÃƒÆ’Ã‚Â¨re page uniquement, max 2000 car ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.read_pdf_brief) {
-                            try {
-                                const base64 = await invokeWithTimeout<string>(
-                                    "read_pdf_bytes",
-                                    { path: parsedTool.read_pdf_brief },
-                                    30000,
-                                );
-                                const pages = await extractPdfPagesFromBase64(base64);
-                                if (pages.length === 0) {
-                                    await sendPrompt(
-                                        `[read_pdf_brief] ${parsedTool.read_pdf_brief} : aucun texte extractible.`,
-                                        cfg,
-                                    );
-                                } else {
-                                    const text = pages[0].text.slice(0, 2000);
-                                    await sendPrompt(`[PDF page 1 : ${parsedTool.read_pdf_brief}]\n${text}`, cfg);
-                                }
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur read_pdf_brief]: ${err}`, cfg);
-                            }
+                        if (await handleReadPdf({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ read_pdf_batch ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â lit N PDFs (1ÃƒÆ’Ã‚Â¨re page) en un seul appel IPC ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.read_pdf_batch) {
-                            try {
-                                let paths: string[];
-                                if (Array.isArray(parsedTool.read_pdf_batch)) {
-                                    // L'IA a gÃƒÆ’Ã‚Â©nÃƒÆ’Ã‚Â©rÃƒÆ’Ã‚Â© un tableau natif JSON
-                                    paths = parsedTool.read_pdf_batch as string[];
-                                } else {
-                                    try {
-                                        paths = JSON.parse(parsedTool.read_pdf_batch);
-                                    } catch {
-                                        lastToolWasErrorRef.current = true;
-                                        await sendPrompt(
-                                            `[Erreur read_pdf_batch] JSON invalide. Format attendu : ["chemin1.pdf", "chemin2.pdf", ...]\nLes guillemets internes doivent ÃƒÆ’Ã‚Âªtre ÃƒÆ’Ã‚Â©chappÃƒÆ’Ã‚Â©s avec \\\\.`,
-                                            cfg,
-                                        );
-                                        return;
-                                    }
-                                }
-                                type PdfBatchItem = {
-                                    path: string;
-                                    base64: string | null;
-                                    error: string | null;
-                                };
-                                const items = await invokeWithTimeout<PdfBatchItem[]>(
-                                    "read_pdf_batch",
-                                    { paths },
-                                    60000,
-                                );
-                                const parts: string[] = [];
-                                for (const item of items) {
-                                    const name = item.path.split(/[\\/]/).pop() ?? item.path;
-                                    if (item.error || !item.base64) {
-                                        parts.push(`[${name}] Erreur: ${item.error ?? "base64 vide"}`);
-                                        continue;
-                                    }
-                                    try {
-                                        const pages = await extractPdfPagesFromBase64(item.base64);
-                                        const text = pages.length > 0 ? pages[0].text.slice(0, 2000) : "(aucun texte)";
-                                        parts.push(`[PDF: ${name}]\n${text}`);
-                                    } catch (e) {
-                                        parts.push(`[${name}] Erreur extraction: ${e}`);
-                                    }
-                                }
-                                await sendPrompt(
-                                    `[read_pdf_batch] ${items.length} fichier(s) analysÃƒÆ’Ã‚Â©s :\n\n${parts.join("\n\n---\n\n")}`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur read_pdf_batch]: ${err}`, cfg);
-                            }
+                        if (await handleReadPdfBrief({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
-                        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ batch_rename ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â renommer plusieurs fichiers en un appel ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        if (parsedTool.batch_rename) {
-                            try {
-                                let entries: Array<{ from: string; to: string }>;
-                                if (Array.isArray(parsedTool.batch_rename)) {
-                                    // L'IA a gÃƒÆ’Ã‚Â©nÃƒÆ’Ã‚Â©rÃƒÆ’Ã‚Â© un tableau natif JSON
-                                    entries = parsedTool.batch_rename as Array<{ from: string; to: string }>;
-                                } else {
-                                    try {
-                                        entries = JSON.parse(parsedTool.batch_rename);
-                                    } catch {
-                                        lastToolWasErrorRef.current = true;
-                                        await sendPrompt(
-                                            `[Erreur batch_rename] JSON invalide. Format attendu : [{"from": "chemin/ancien.pdf", "to": "nouveau.pdf"}, ...]\nLes guillemets internes doivent ÃƒÆ’Ã‚Âªtre ÃƒÆ’Ã‚Â©chappÃƒÆ’Ã‚Â©s avec \\\\.`,
-                                            cfg,
-                                        );
-                                        return;
-                                    }
-                                }
-                                type RenameResult = {
-                                    from: string;
-                                    to: string;
-                                    success: boolean;
-                                    error: string | null;
-                                };
-                                const results = await invokeWithTimeout<RenameResult[]>(
-                                    "batch_rename_files",
-                                    { renames: entries },
-                                    30000,
-                                );
-                                const successCount = results.filter((r) => r.success).length;
-                                const lines = results.map((r) =>
-                                    r.success
-                                        ? `  ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ ${r.from.split("/").pop()} ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ${r.to.split("/").pop()}`
-                                        : `  ÃƒÂ¢Ã…â€œÃ¢â‚¬â€ ${r.from.split("/").pop()} : ${r.error}`,
-                                );
-                                await sendPrompt(
-                                    `[batch_rename] ${successCount}/${results.length} fichiers renommÃƒÆ’Ã‚Â©s avec succÃƒÆ’Ã‚Â¨s.\n${lines.join("\n")}`,
-                                    cfg,
-                                );
-                            } catch (err) {
-                                lastToolWasErrorRef.current = true;
-                                await sendPrompt(`[Erreur batch_rename]: ${err}`, cfg);
-                            }
+                        if (await handleReadPdfBatch({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
+                            return;
+                        }
+
+                        if (await handleBatchRename({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Garde de mode : outils d'action bloquÃƒÆ’Ã‚Â©s hors mode agent ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-                        const isActionTool = !!(
-                            parsedTool.create_skill ||
-                            parsedTool.run_skill ||
-                            parsedTool.cmd ||
-                            parsedTool.command ||
-                            parsedTool.http_request ||
-                            parsedTool.write_file ||
-                            parsedTool.create_mcp_server ||
-                            parsedTool.start_mcp_server ||
-                            parsedTool.call_mcp_tool ||
-                            parsedTool.open_browser !== undefined ||
-                            parsedTool.start_dev_server !== undefined ||
-                            parsedTool.stop_dev_server !== undefined ||
-                            parsedTool.get_browser_errors !== undefined ||
-                            parsedTool.save_image !== undefined ||
-                            parsedTool.download_image !== undefined ||
-                            parsedTool.scrape_url !== undefined ||
-                            parsedTool.search_web !== undefined ||
-                            parsedTool["context7-search"] !== undefined ||
-                            parsedTool["context7-docs"] !== undefined ||
-                            parsedTool.save_plan !== undefined ||
-                            parsedTool.create_terminal !== undefined ||
-                            parsedTool.terminal_exec !== undefined ||
-                            parsedTool.terminal_start_interactive !== undefined ||
-                            parsedTool.terminal_send_stdin !== undefined ||
-                            parsedTool.close_terminal !== undefined
-                        );
-                        if (!forceExecute && isActionTool && chatModeRef.current === "ask") {
-                            const toolDesc =
-                                parsedTool.cmd ??
-                                parsedTool.command ??
-                                parsedTool.create_skill ??
-                                parsedTool.run_skill ??
-                                parsedTool.http_request ??
-                                parsedTool.read_file ??
-                                parsedTool.write_file ??
-                                parsedTool.create_mcp_server ??
-                                parsedTool.start_mcp_server ??
-                                parsedTool.call_mcp_tool ??
-                                parsedTool.open_browser ??
-                                parsedTool.start_dev_server ??
-                                "action";
+                        const actionTool = isActionTool(parsedTool);
+                        if (!forceExecute && actionTool && chatModeRef.current === "ask") {
+                            const toolDesc = describeTool(parsedTool);
                             setPendingAgentPermission({
                                 reason: `Je veux exÃƒÆ’Ã‚Â©cuter : **${toolDesc}**\nAutoriser en passant en mode Agent ?`,
                                 parsed: parsedTool,
@@ -934,20 +614,8 @@ export function useToolCalling({
                             });
                             return;
                         }
-                        if (!forceExecute && isActionTool && chatModeRef.current === "plan") {
-                            const toolDesc =
-                                parsedTool.cmd ??
-                                parsedTool.command ??
-                                parsedTool.create_skill ??
-                                parsedTool.run_skill ??
-                                parsedTool.http_request ??
-                                parsedTool.write_file ??
-                                parsedTool.create_mcp_server ??
-                                parsedTool.start_mcp_server ??
-                                parsedTool.call_mcp_tool ??
-                                parsedTool.open_browser ??
-                                parsedTool.start_dev_server ??
-                                "action";
+                        if (!forceExecute && actionTool && chatModeRef.current === "plan") {
+                            const toolDesc = describeTool(parsedTool);
                             setPendingPlanConfirm({
                                 description: `**Plan** : je vais exÃƒÆ’Ã‚Â©cuter l'action suivante :\n\`${toolDesc}\`\n\nConfirmer l'exÃƒÆ’Ã‚Â©cution ?`,
                                 parsed: parsedTool,
