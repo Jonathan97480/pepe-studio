@@ -108,6 +108,17 @@ export type DetectedTemplate = { chatTemplate?: string; useJinja?: boolean };
 export function detectChatTemplate(modelPath: string): DetectedTemplate {
     const name = modelPath.split(/[\/\\]/).pop()?.toLowerCase() ?? "";
 
+    // Qwen3 officiel : forcer --jinja même si le GGUF contient déjà un template.
+    // Sans --jinja, le serveur ignore le chat_template embarqué → réponses silencieuses.
+    // Ne pas toucher aux variantes uncensored/abliterated (gérées ci-dessous).
+    const isQwen3 = /(^|[-_])qwen[-_]?3([-. _]|$)/i.test(name);
+    const isUncensoredVariant =
+        name.includes("uncensored") ||
+        name.includes("abliterat") ||
+        name.includes("ablation") ||
+        name.includes("noncensored");
+    if (isQwen3 && !isUncensoredVariant) return { useJinja: true };
+
     // Forcer le template uniquement si le modèle est un finetune sans template GGUF valide
     const isMissingTemplate =
         name.includes("uncensored") ||
