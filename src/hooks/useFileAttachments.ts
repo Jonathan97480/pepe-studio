@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import { extractPdfPages } from "../lib/pdfExtract";
+import { extractPdfPages, ocrPdfPages } from "../lib/pdfExtract";
 import { resizeImageToDataUrl } from "../lib/chatUtils";
 import type { Attachment } from "./useLlama";
 
@@ -34,7 +34,10 @@ export function useFileAttachments(): UseFileAttachmentsResult {
                     newAtts.push({ name: file.name, mimeType: file.type, dataUrl });
                 } else if (file.type === "application/pdf") {
                     try {
-                        const pages = await extractPdfPages(file);
+                        let pages = await extractPdfPages(file);
+                        if (pages.length === 0) {
+                            pages = await ocrPdfPages(file);
+                        }
                         const docId = await invoke<number>("store_document", {
                             name: file.name,
                             chunks: pages.map((p) => ({ page_num: p.pageNum, text: p.text })),
@@ -43,7 +46,10 @@ export function useFileAttachments(): UseFileAttachmentsResult {
                     } catch (err) {
                         console.error("[RAG] indexation PDF échouée", err);
                         try {
-                            const pages = await extractPdfPages(file);
+                            let pages = await extractPdfPages(file);
+                            if (pages.length === 0) {
+                                pages = await ocrPdfPages(file);
+                            }
                             const text = pages.map((p) => `[Page ${p.pageNum}]\n${p.text}`).join("\n\n");
                             newAtts.push({ name: file.name, mimeType: file.type, text });
                         } catch {

@@ -93,6 +93,7 @@ export function useLlama() {
     // Détection de boucle de répétition
     const streamBufferRef = useRef<string>("");
     const repetitionAbortedRef = useRef<boolean>(false);
+    const assistantVisibleBufferRef = useRef<string>("");
 
     useEffect(() => {
         currentPromptIdRef.current = currentPromptId;
@@ -111,19 +112,38 @@ export function useLlama() {
         console.log("[useLlama-debug]", message);
     }, []);
 
-    /** Détecte si le buffer contient une séquence répétée en boucle */
+    const normalizeVisibleAssistantText = useCallback((text: string): string => {
+        return text
+            .replace(/<tool>[\s\S]*?<\/tool>/gi, " ")
+            .replace(/<patch_file[\s\S]*?<\/patch_file>/gi, " ")
+            .replace(/<write_file[\s\S]*?<\/write_file>/gi, " ")
+            .replace(/<think>[\s\S]*?<\/think>/gi, " ")
+            .replace(/\[start thinking\]|\[end thinking\]/gi, " ")
+            .replace(/<unused\d+>/g, " ")
+            .replace(/[{}[\]<>`"\\/_|=:~]+/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+    }, []);
+
+    /** Détecte si le texte assistant visible contient une vraie séquence répétée en boucle */
     const detectRepetitionLoop = useCallback((buffer: string): boolean => {
-        // On ne teste que si le buffer est assez long
-        if (buffer.length < 200) return false;
-        // Prend les 500 derniers caractères pour l'analyse
-        const tail = buffer.slice(-500);
-        // Cherche un motif de 15-80 chars qui se répète au moins 4 fois
-        for (let len = 15; len <= 80; len++) {
-            const pattern = tail.slice(-len);
+        const normalized = normalizeVisibleAssistantText(buffer);
+        if (normalized.length < 260) return false;
+        const alphaChars = (normalized.match(/[A-Za-zÀ-ÿ]/g) ?? []).length;
+        if (alphaChars < 180) return false;
+
+        const tail = normalized.slice(-700);
+        for (let len = 30; len <= 120; len++) {
+            const pattern = tail.slice(-len).trim();
+            if (pattern.length < 24) continue;
+            const wordCount = pattern.split(/\s+/).filter(Boolean).length;
+            if (wordCount < 4) continue;
+
             let count = 0;
             let pos = tail.length - len;
             while (pos >= 0) {
-                if (tail.slice(pos, pos + len) === pattern) {
+                const segment = tail.slice(pos, pos + len).trim();
+                if (segment === pattern) {
                     count++;
                     pos -= len;
                 } else {
@@ -133,7 +153,7 @@ export function useLlama() {
             if (count >= 4) return true;
         }
         return false;
-    }, []);
+    }, [normalizeVisibleAssistantText]);
 
     const unlistenRef = useRef<{ stream?: UnlistenFn; done?: UnlistenFn; error?: UnlistenFn; usage?: UnlistenFn }>({});
 
@@ -167,10 +187,23 @@ export function useLlama() {
 
                     // ── Détection de boucle de répétition ────────────────────────
                     streamBufferRef.current += payload.chunk;
-                    if (streamBufferRef.current.length > 600) {
-                        streamBufferRef.current = streamBufferRef.current.slice(-500);
+                    if (streamBufferRef.current.length > 2000) {
+                        streamBufferRef.current = streamBufferRef.current.slice(-1600);
                     }
-                    if (!repetitionAbortedRef.current && detectRepetitionLoop(streamBufferRef.current)) {
+
+                    const visibleChunk = normalizeVisibleAssistantText(payload.chunk);
+                    if (visibleChunk) {
+                        assistantVisibleBufferRef.current += ` ${visibleChunk}`;
+                        if (assistantVisibleBufferRef.current.length > 2000) {
+                            assistantVisibleBufferRef.current = assistantVisibleBufferRef.current.slice(-1600);
+                        }
+                    }
+
+                    if (
+                        !repetitionAbortedRef.current &&
+                        !/<tool>|<patch_file|<write_file/i.test(payload.chunk) &&
+                        detectRepetitionLoop(assistantVisibleBufferRef.current)
+                    ) {
                         console.warn("[useLlama] Boucle de répétition détectée — arrêt du stream");
                         debugLog("⚠ Boucle de répétition détectée — arrêt du stream");
                         repetitionAbortedRef.current = true;
@@ -471,6 +504,7 @@ export function useLlama() {
         // Réinitialiser la détection de boucle
         streamBufferRef.current = "";
         repetitionAbortedRef.current = false;
+        assistantVisibleBufferRef.current = "";
         const promptId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         console.log("[useLlama] sendPrompt", { promptId, prompt, params });
         currentPromptIdRef.current = promptId;

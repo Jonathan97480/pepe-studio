@@ -83,8 +83,13 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                 "list_terminals",
                 "get_terminal_history",
                 "read_file",
+                "analyze_folder",
+                "list_folder_files",
                 "write_file",
                 "patch_file",
+                "read_image",
+                "read_image_batch",
+                "list_folder_images",
                 "read_pdf",
                 "read_pdf_brief",
                 "read_pdf_batch",
@@ -129,7 +134,9 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                         ? "terminal"
                         : id === "get_hardware_info"
                           ? "terminal"
-                        : id.startsWith("read_") || id === "write_file" || id === "patch_file" || id === "batch_rename" || id === "list_folder_pdfs"
+                        : ["read_image", "read_image_batch", "list_folder_images", "save_image", "download_image"].includes(id)
+                          ? "images"
+                        : id.startsWith("read_") || id === "analyze_folder" || id === "write_file" || id === "patch_file" || id === "batch_rename" || id === "list_folder_pdfs" || id === "list_folder_files" || id === "list_folder_images"
                           ? "files"
                           : id.includes("skill")
                             ? "skills"
@@ -141,10 +148,8 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                                   ? "scrape_url"
                                   : ["open_browser", "start_dev_server", "stop_dev_server", "get_browser_errors", "get_dev_server_info"].includes(id)
                                     ? "browser"
-                                    : ["save_image", "download_image"].includes(id)
-                                      ? "images"
-                                      : ["context7-search", "context7-docs"].includes(id)
-                                        ? "context7"
+                                    : ["context7-search", "context7-docs"].includes(id)
+                                      ? "context7"
                                         : ["create_mcp_server", "start_mcp_server", "call_mcp_tool", "list_mcp_servers"].includes(id)
                                           ? "mcp"
                                           : ["search_conversation"].includes(id)
@@ -169,6 +174,7 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                     `Réponds directement à la demande actuelle.`,
                     `Utilise un bloc <tool>{...}</tool> non seulement pour les actions explicites, mais aussi pour toute question qui dépend d'un état local réel de la machine, d'un fichier, d'un terminal, du réseau ou de l'heure courante.`,
                     `Exemples: "liste mes cartes graphiques", "on est quel jour", "quel fichier est dans ce dossier", "quel port est occupé" => utilise l'outil approprié puis réponds avec le résultat.`,
+                    `Pour analyser un dossier local complet, utilise de préférence analyze_folder. Si tu dois être plus précis, commence par list_folder_files, list_folder_pdfs ou list_folder_images avant de lire les fichiers utiles.`,
                     `Pour les informations matérielles locales (GPU, RAM, CPU), préfère <tool>{"get_hardware_info":true}</tool> avant d'utiliser cmd.`,
                     `Quand l'utilisateur demande une action explicite ou une information locale vérifiable, utilise l'outil adapté au lieu de refuser.`,
                     `N'invente jamais l'exécution d'une action: soit tu utilises un outil, soit tu réponds en texte.`,
@@ -553,6 +559,12 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                           `=== LECTURE DE FICHIERS ===`,
                           `Pour lire le contenu d'un fichier sur le disque (HTML, JS, JSON, TXT, etc.) :`,
                           `  <tool>{"read_file": "E:/portfolio2/index.html"}</tool>`,
+                          `Pour analyser directement un dossier mixte (PDF, images, textes) :`,
+                          `  <tool>{"analyze_folder": "E:/documents"}</tool>`,
+                          `  Avec sous-dossiers : <tool>{"analyze_folder": "E:/documents", "recursive": true}</tool>`,
+                          `Pour lister les fichiers d'un dossier (tout type ou filtré) :`,
+                          `  <tool>{"list_folder_files": "E:/documents"}</tool>`,
+                          `  Avec filtre d'extensions : <tool>{"list_folder_files": "E:/documents", "extensions": ["pdf", "png", "jpg"]}</tool>`,
                           `Règles :`,
                           `  - Chemin absolu recommandé`,
                           `  - Limite : 512 Ko (au-delà, une erreur est retournée)`,
@@ -564,6 +576,7 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                           `read_pdf_batch = 1 seul appel IPC pour N fichiers → renvoie la 1ère page (max 2000 car) de chacun.`,
                           `read_pdf_brief = 1 fichier à la fois SEULEMENT — INTERDIT dans une boucle ou pour un lot.`,
                           `read_pdf = toutes les pages, 1 seul document — réservé aux analyses approfondies.`,
+                          `Si un PDF est scanné et sans texte natif, l'app tente automatiquement un OCR local.`,
                           ``,
                           `Lire la 1ère page de PLUSIEURS PDFs en un seul appel (outil principal pour les lots) :`,
                           `  <tool>{"read_pdf_batch": "[\\"E:/dossier/fichier1.pdf\\", \\"E:/dossier/fichier2.pdf\\", ...]"}</tool>`,
@@ -733,6 +746,18 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                 ...(toolOn("images")
                     ? [
                           `=== GESTION DES IMAGES ===`,
+                          `Lister les images d'un dossier :`,
+                          `  <tool>{"list_folder_images": "E:/images"}</tool>`,
+                          `  Avec sous-dossiers : <tool>{"list_folder_images": "E:/images", "recursive": true}</tool>`,
+                          ``,
+                          `Charger une image locale du disque pour l'analyser :`,
+                          `  <tool>{"read_image": "E:/images/capture.png"}</tool>`,
+                          `  → Si du texte est visible, un OCR local est tenté automatiquement`,
+                          ``,
+                          `Charger plusieurs images locales en un seul appel :`,
+                          `  <tool>{"read_image_batch": ["E:/images/1.png", "E:/images/2.jpg"]}</tool>`,
+                          `  → Format TABLEAU NATIF JSON`,
+                          ``,
                           `Sauvegarder une image (data URL base64) sur le disque :`,
                           `  <tool>{"save_image": "data:image/png;base64,...", "filename": "mon-image.png"}</tool>`,
                           `  → filename est optionnel (auto-généré si absent)`,
@@ -748,6 +773,7 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                           `  - Pour AFFICHER une image dans le chat : utilise ![description](dataUrl) avec le dataUrl retourné`,
                           `  - Pour ENVOYER une image à une API : utilise le dataUrl dans http_request`,
                           `  - Si l'utilisateur t'a envoyé une image (dans ce message), son dataUrl est déjà disponible — utilise save_image pour la sauvegarder`,
+                          `  - Pour analyser un dossier d'images local : list_folder_images puis read_image ou read_image_batch`,
                           ``,
                       ]
                     : []),
@@ -930,12 +956,12 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                 `  <tool>{"get_tool_doc": "write_file"}</tool>       → doc complète de write_file`,
                 `  <tool>{"get_tool_doc": "terminal"}</tool>         → tous les outils contenant "terminal"`,
                 `  <tool>{"get_tool_doc": "skill"}</tool>            → tous les outils liés aux skills`,
-                `Outils documentés : cmd, write_file, patch_file, read_file, create_terminal, terminal_exec,`,
+                `Outils documentés : cmd, write_file, patch_file, read_file, analyze_folder, list_folder_files, list_folder_images, read_image, read_image_batch, create_terminal, terminal_exec,`,
                 `  terminal_start_interactive, terminal_send_stdin, close_terminal, list_terminals, get_terminal_history, create_skill, run_skill, read_skill,`,
 
                 `  patch_skill, delete_skill, http_request, search_web, scrape_url, open_browser,`,
                 `  start_dev_server, stop_dev_server, get_browser_errors, get_dev_server_info, save_image,`,
-                `  download_image, ask_user, set_mode, request_agent_mode, get_plan, save_plan,`,
+                `  download_image, list_folder_pdfs, read_pdf, read_pdf_brief, read_pdf_batch, batch_rename, ask_user, set_mode, request_agent_mode, get_plan, save_plan,`,
                 `  search_conversation, context7-search, context7-docs, create_mcp_server,`,
                 `  start_mcp_server, call_mcp_tool, list_mcp_servers, save_fact, get_tool_doc,`,
                 `  set_todo, check_todo, save_project_structure, get_project_structure`,

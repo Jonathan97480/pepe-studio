@@ -69,21 +69,42 @@ Usage : <tool>{"read_file": "E:/projet/index.html"}</tool>
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Ne fonctionne PAS pour les PDF (binaire) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ utilise read_pdf ÃƒÆ’Ã‚Â  la place.
 Toujours lire un fichier avant de le modifier (RÃƒÆ’Ã‹â€ GLE 0).`,
 
+    analyze_folder: `=== analyze_folder — Analyser un dossier local mixte ===
+Usage : <tool>{"analyze_folder": "E:/documents"}</tool>
+Avec récursivité : <tool>{"analyze_folder": "E:/documents", "recursive": true}</tool>
+Avec limite : <tool>{"analyze_folder": "E:/documents", "max_files": 40}</tool>
+• Liste les fichiers du dossier, les classe (PDF, images, textes, autres) et extrait des aperçus utiles.
+• Pour les PDF : preview de la première page, avec OCR si nécessaire.
+• Pour les images : OCR local si du texte est détectable, et joint quelques images au modèle.
+• Pour les fichiers texte : extrait un aperçu du contenu.
+• Utile quand l'utilisateur dit "analyse ce dossier" sans détailler chaque fichier.`,
+
+    list_folder_files: `=== list_folder_files — Lister les fichiers d'un dossier ===
+Usage : <tool>{"list_folder_files": "E:/documents"}</tool>
+Avec extensions : <tool>{"list_folder_files": "E:/documents", "extensions": ["pdf", "png", "jpg"]}</tool>
+Avec récursivité : <tool>{"list_folder_files": "E:/documents", "recursive": true}</tool>
+• Retourne la liste des fichiers du dossier.
+• extensions est optionnel et accepte un tableau JSON natif ou une chaîne CSV simple.
+• Utile comme première étape pour analyser un dossier mixte.`,
+
     read_pdf: `=== read_pdf ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Lire un fichier PDF complet (toutes les pages) ===
 Usage : <tool>{"read_pdf": "E:/documents/rapport.pdf"}</tool>
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Retourne le texte de TOUTES les pages ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â utile pour analyse dÃƒÆ’Ã‚Â©taillÃƒÆ’Ã‚Â©e ou rÃƒÆ’Ã‚Â©sumÃƒÆ’Ã‚Â© d'un seul document.
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Retourne beaucoup de contexte ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â rÃƒÆ’Ã‚Â©servÃƒÆ’Ã‚Â© ÃƒÆ’Ã‚Â  l'analyse approfondie d'UN seul PDF.
+ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Si le PDF est scannÃƒÆ’Ã‚Â© et n'a pas de texte natif, un fallback OCR est tentÃƒÆ’Ã‚Â©.
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Pour traiter plusieurs PDFs ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ utilise read_pdf_batch.`,
 
     read_pdf_brief: `=== read_pdf_brief ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Lire la 1ÃƒÆ’Ã‚Â¨re page d'un seul PDF ===
 Usage : <tool>{"read_pdf_brief": "E:/documents/facture.pdf"}</tool>
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ 1ÃƒÆ’Ã‚Â¨re page uniquement, max 2000 caractÃƒÆ’Ã‚Â¨res.
+ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Si la page est une image scannÃƒÆ’Ã‚Â©e, un fallback OCR est tentÃƒÆ’Ã‚Â©.
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Pour traiter PLUSIEURS PDFs en une seule opÃƒÆ’Ã‚Â©ration ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ utilise read_pdf_batch (plus efficace).`,
 
     read_pdf_batch: `=== read_pdf_batch ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Lire la 1ÃƒÆ’Ã‚Â¨re page de PLUSIEURS PDFs en un seul appel ===
 Usage : <tool>{"read_pdf_batch": "[\\"E:/Test IA PDF/fichier1.pdf\\", \\"E:/Test IA PDF/fichier2.pdf\\", ...]"}</tool>
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ OUTIL PRINCIPAL pour tout traitement en lot de PDFs.
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Retourne la 1ÃƒÆ’Ã‚Â¨re page de chaque PDF (max 2000 caractÃƒÆ’Ã‚Â¨res par fichier) en UN SEUL appel.
+ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Si un PDF n'a pas de texte natif, un OCR est tentÃƒÆ’Ã‚Â© sur la premiÃƒÆ’Ã‚Â¨re page.
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ ÃƒÂ¢Ã¢â‚¬ÂºÃ¢â‚¬Â INTERDIT d'appeler read_pdf_brief fichier par fichier quand on traite un lot ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â utilise read_pdf_batch.
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Recommandation : envoyer 30 chemins max par appel pour ÃƒÆ’Ã‚Â©viter les timeouts.
 Workflow batch PDF OBLIGATOIRE (ÃƒÂ¢Ã¢â‚¬Â°Ã‚Â¥ 2 fichiers ÃƒÆ’Ã‚Â  renommer/analyser) :
@@ -97,6 +118,25 @@ Usage : <tool>{"list_folder_pdfs": "E:/documents"}</tool>
 Usage rÃƒÆ’Ã‚Â©cursif : <tool>{"list_folder_pdfs": "E:/documents", "recursive": "true"}</tool>
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Liste tous les fichiers .pdf dans le dossier indiquÃƒÆ’Ã‚Â©.
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Puis utilise read_pdf_batch pour lire les mÃƒÆ’Ã‚Â©tadonnÃƒÆ’Ã‚Â©es de tous les fichiers.`,
+
+    read_image: `=== read_image — Charger une image locale pour analyse ===
+Usage : <tool>{"read_image": "E:/images/photo.png"}</tool>
+• Charge une image depuis le disque et la joint au modèle.
+• Si du texte est visible dans l'image, un OCR local est tenté et injecté dans le contexte.
+• À utiliser pour analyser une capture d'écran, une photo ou un document image local.
+• Répond ensuite uniquement à partir du contenu visible.`,
+
+    read_image_batch: `=== read_image_batch — Charger plusieurs images locales ===
+Usage : <tool>{"read_image_batch": ["E:/images/1.png", "E:/images/2.jpg"]}</tool>
+• Charge plusieurs images du disque en un seul appel.
+• Format attendu : tableau JSON natif.
+• Utile après list_folder_images pour analyser un dossier d'images.`,
+
+    list_folder_images: `=== list_folder_images — Lister les images d'un dossier ===
+Usage : <tool>{"list_folder_images": "E:/images"}</tool>
+Usage récursif : <tool>{"list_folder_images": "E:/images", "recursive": true}</tool>
+• Liste les fichiers image courants : png, jpg, jpeg, webp, gif, bmp, svg.
+• Utilise ensuite read_image ou read_image_batch pour les analyser.`,
 
     batch_rename: `=== batch_rename ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Renommer plusieurs fichiers en une seule opÃƒÆ’Ã‚Â©ration ===
 Usage : <tool>{"batch_rename": [{"from": "E:/dossier/ancien.pdf", "to": "nouveau.pdf"}, ...]}</tool>

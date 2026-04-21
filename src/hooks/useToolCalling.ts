@@ -4,9 +4,14 @@ import { hasPatchBlocks, applyAllPatches, type PatchResult } from "../lib/skillP
 import { normalizeToolTags, sanitizeLlmJson, extractSimpleTool, extractWriteFileTool } from "../lib/chatUtils";
 import { describeTool, isActionTool, resolveToolDoc } from "../lib/toolDispatchUtils";
 import {
+    handleAnalyzeFolder,
     handleBatchRename,
+    handleListFolderFiles,
+    handleListFolderImages,
     handleListFolderPdfs,
     handleReadFile,
+    handleReadImage,
+    handleReadImageBatch,
     handleReadPdf,
     handleReadPdfBatch,
     handleReadPdfBrief,
@@ -383,7 +388,9 @@ export function useToolCalling({
                         const toolSignature = JSON.stringify(parsedTool);
                         if (toolSignature === lastToolSignatureRef.current && !lastToolWasErrorRef.current) {
                             await sendPrompt(
-                                `[SystÃƒÆ’Ã‚Â¨me] Action bloquÃƒÆ’Ã‚Â©e : tu viens d'exÃƒÆ’Ã‚Â©cuter exactement ce mÃƒÆ’Ã‚Âªme outil. Stop la boucle et rÃƒÆ’Ã‚Â©ponds directement ÃƒÆ’Ã‚Â  l'utilisateur.`,
+                                `[Système] Action bloquée : tu viens d'exécuter exactement ce même outil et cette NOUVELLE tentative n'a PAS été exécutée.
+Ne prétends pas qu'elle a réussi.
+Soit tu utilises un outil différent, soit tu réponds avec le dernier résultat réel déjà obtenu.`,
                                 cfg,
                             );
                             return;
@@ -539,7 +546,23 @@ export function useToolCalling({
                             return;
                         }
 
+                        if (await handleAnalyzeFolder({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
+                            return;
+                        }
+
+                        if (await handleListFolderFiles({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
+                            return;
+                        }
+
+                        if (await handleListFolderImages({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
+                            return;
+                        }
+
                         if (await handleListFolderPdfs({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
+                            return;
+                        }
+
+                        if (await handleReadImage({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 
@@ -552,6 +575,10 @@ export function useToolCalling({
                         }
 
                         if (await handleReadPdfBatch({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
+                            return;
+                        }
+
+                        if (await handleReadImageBatch({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
                             return;
                         }
 

@@ -411,6 +411,192 @@ fn collect_pdfs(
     Ok(())
 }
 
+fn collect_matching_files(
+    dir: &std::path::Path,
+    recursive: bool,
+    extensions: Option<&std::collections::HashSet<String>>,
+    out: &mut Vec<String>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && recursive {
+            collect_matching_files(&path, true, extensions, out)?;
+        } else if path.is_file() {
+            let matches = match extensions {
+                Some(exts) => path
+                    .extension()
+                    .map(|ext| exts.contains(&ext.to_string_lossy().to_lowercase()))
+                    .unwrap_or(false),
+                None => true,
+            };
+            if matches {
+                out.push(path.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[command]
+pub fn list_folder_files(
+    folder: String,
+    recursive: Option<bool>,
+    extensions: Option<Vec<String>>,
+) -> Result<Vec<String>, String> {
+    if folder.trim().is_empty() {
+        return Err("Chemin de dossier vide".into());
+    }
+    let p = std::path::Path::new(&folder);
+    if !p.exists() {
+        return Err(format!("Dossier introuvable : {}", folder));
+    }
+    if !p.is_dir() {
+        return Err(format!("Ce chemin n'est pas un dossier : {}", folder));
+    }
+
+    let extension_set = extensions.and_then(|values| {
+        let cleaned: std::collections::HashSet<String> = values
+            .into_iter()
+            .map(|v| v.trim().trim_start_matches('.').to_lowercase())
+            .filter(|v| !v.is_empty())
+            .collect();
+        if cleaned.is_empty() {
+            None
+        } else {
+            Some(cleaned)
+        }
+    });
+
+    let mut results: Vec<String> = Vec::new();
+    collect_matching_files(p, recursive.unwrap_or(false), extension_set.as_ref(), &mut results)?;
+    results.sort();
+    Ok(results)
+}
+
+#[command]
+pub fn list_folder_images(folder: String, recursive: Option<bool>) -> Result<Vec<String>, String> {
+    list_folder_files(
+        folder,
+        recursive,
+        Some(vec![
+            "png".into(),
+            "jpg".into(),
+            "jpeg".into(),
+            "webp".into(),
+            "gif".into(),
+            "bmp".into(),
+            "svg".into(),
+        ]),
+    )
+}
+
+fn infer_image_mime(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        _ => "image/png",
+    }
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ImageReadResult {
+    pub path: String,
+    pub data_url: String,
+    pub filename: String,
+    pub mime_type: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ImageBatchItem {
+    pub path: String,
+    pub data_url: Option<String>,
+    pub filename: Option<String>,
+    pub mime_type: Option<String>,
+    pub error: Option<String>,
+}
+
+#[command]
+pub fn read_image(path: String) -> Result<ImageReadResult, String> {
+    use base64::Engine;
+
+    if path.trim().is_empty() {
+        return Err("Chemin image vide".into());
+    }
+
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Fichier introuvable : {}", path));
+    }
+    if !p.is_file() {
+        return Err(format!("Ce chemin n'est pas un fichier : {}", path));
+    }
+
+    let mime_type = infer_image_mime(p).to_string();
+    if !mime_type.starts_with("image/") {
+        return Err("Fichier image non supporté".into());
+    }
+
+    let metadata = std::fs::metadata(p).map_err(|e| e.to_string())?;
+    if metadata.len() > 20 * 1024 * 1024 {
+        return Err(format!(
+            "Image trop volumineuse ({} Mo) — limite 20 Mo",
+            metadata.len() / 1_048_576
+        ));
+    }
+
+    let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
+    let data_url = format!(
+        "data:{};base64,{}",
+        mime_type,
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    );
+    let filename = p
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("image")
+        .to_string();
+
+    Ok(ImageReadResult {
+        path: p.to_string_lossy().replace('\\', "/"),
+        data_url,
+        filename,
+        mime_type,
+    })
+}
+
+#[command]
+pub fn read_image_batch(paths: Vec<String>) -> Vec<ImageBatchItem> {
+    paths
+        .into_iter()
+        .map(|path| match read_image(path.clone()) {
+            Ok(result) => ImageBatchItem {
+                path: result.path,
+                data_url: Some(result.data_url),
+                filename: Some(result.filename),
+                mime_type: Some(result.mime_type),
+                error: None,
+            },
+            Err(error) => ImageBatchItem {
+                path,
+                data_url: None,
+                filename: None,
+                mime_type: None,
+                error: Some(error),
+            },
+        })
+        .collect()
+}
+
 // ─── Lecture batch de PDFs (base64) ──────────────────────────────────────────
 
 #[derive(Serialize, Clone, Debug)]
