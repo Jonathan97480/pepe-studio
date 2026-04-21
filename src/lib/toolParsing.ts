@@ -129,6 +129,39 @@ export const extractWriteFileTool = (raw: string): { write_file: string; content
     return { write_file: pathMatch[1], content };
 };
 
+export const extractSimpleTool = (raw: string): Record<string, string | boolean> | null => {
+    const trimmed = raw.trim();
+
+    const directPatterns: Array<{ key: string; regex: RegExp }> = [
+        { key: "cmd", regex: /"cmd"\s*:\s*"([\s\S]*?)"/i },
+        { key: "read_file", regex: /"read_file"\s*:\s*"([\s\S]*?)"/i },
+        { key: "get_tool_doc", regex: /"get_tool_doc"\s*:\s*"([\s\S]*?)"/i },
+        { key: "search_web", regex: /"search_web"\s*:\s*"([\s\S]*?)"/i },
+        { key: "scrape_url", regex: /"scrape_url"\s*:\s*"([\s\S]*?)"/i },
+        { key: "open_browser", regex: /"open_browser"\s*:\s*"([\s\S]*?)"/i },
+    ];
+    for (const { key, regex } of directPatterns) {
+        const match = trimmed.match(regex);
+        if (match) return { [key]: match[1].replace(/\\"/g, '"').trim() };
+    }
+
+    if (/"get_browser_errors"/i.test(trimmed)) return { get_browser_errors: true };
+    if (/"stop_dev_server"/i.test(trimmed)) return { stop_dev_server: true };
+    if (/"get_dev_server_info"/i.test(trimmed)) return { get_dev_server_info: true };
+    if (/"get_hardware_info"/i.test(trimmed)) return { get_hardware_info: true };
+
+    // Fallback tolérant pour {"cmd"...:"..."} cassé: on prend la dernière chaîne après "cmd".
+    if (/"cmd"/i.test(trimmed)) {
+        const afterCmd = trimmed.slice(trimmed.search(/"cmd"/i) + 5);
+        const quoted = [...afterCmd.matchAll(/"([^"]+)"/g)].map((m) => m[1].trim()).filter(Boolean);
+        if (quoted.length > 0) {
+            return { cmd: quoted[quoted.length - 1] };
+        }
+    }
+
+    return null;
+};
+
 export const parseMessageSegments = (normalized: string): MessageSegment[] => {
     type FoundBlock = { start: number; end: number; seg: MessageSegment };
     const blocks: FoundBlock[] = [];

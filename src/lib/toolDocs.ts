@@ -1,4 +1,10 @@
 export const TOOL_DOCS: Record<string, string> = {
+    get_hardware_info: `=== get_hardware_info — Informations matérielles locales ===
+Usage : <tool>{"get_hardware_info": true}</tool>
+• Retourne la RAM totale, le nombre de threads CPU et le GPU détecté avec sa VRAM.
+• À utiliser pour les questions comme : "liste mes cartes graphiques", "combien j'ai de RAM ?", "quelle config machine ?"
+• Plus fiable que cmd pour les infos matériel de base.`,
+
     cmd: `=== cmd ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Commande PowerShell ponctuelle ===
 Usage : <tool>{"cmd": "Get-Date"}</tool>
 ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ ExÃƒÆ’Ã‚Â©cute une commande dans un processus isolÃƒÆ’Ã‚Â© (le cwd ne persiste PAS).

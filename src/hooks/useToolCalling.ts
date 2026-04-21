@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { hasPatchBlocks, applyAllPatches, type PatchResult } from "../lib/skillPatcher";
-import { normalizeToolTags, sanitizeLlmJson, extractWriteFileTool } from "../lib/chatUtils";
+import { normalizeToolTags, sanitizeLlmJson, extractSimpleTool, extractWriteFileTool } from "../lib/chatUtils";
 import { describeTool, isActionTool, resolveToolDoc } from "../lib/toolDispatchUtils";
 import {
     handleBatchRename,
@@ -26,6 +26,7 @@ import {
 } from "../lib/toolTerminalHandlers";
 import {
     collectRemainingWriteFiles,
+    handleGetHardwareInfo,
     handlePatchFileJson,
     handleRunCommand,
     handleSaveFact,
@@ -139,6 +140,17 @@ interface UseToolCallingOptions {
     planRef: React.MutableRefObject<string>;
 }
 
+function buildFallbackConversationTitle(messages: LlamaMessage[]): string {
+    const lastUser = [...messages].reverse().find((msg) => msg.role === "user" && msg.content.trim());
+    const source = (lastUser?.content ?? "Nouvelle conversation")
+        .replace(/📎.*$/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    const words = source.split(" ").filter(Boolean).slice(0, 6);
+    const title = words.join(" ").trim();
+    return title || "Nouvelle conversation";
+}
+
 export function useToolCalling({
     streaming,
     toolRunning,
@@ -229,6 +241,12 @@ export function useToolCalling({
                             parseError = jsonErr;
                             if (toolMatch[1].includes('"write_file"')) {
                                 const extracted = extractWriteFileTool(toolMatch[1]);
+                                if (extracted) {
+                                    parsed = extracted as unknown as Record<string, string>;
+                                    parseError = null;
+                                }
+                            } else {
+                                const extracted = extractSimpleTool(toolMatch[1]);
                                 if (extracted) {
                                     parsed = extracted as unknown as Record<string, string>;
                                     parseError = null;
@@ -593,6 +611,10 @@ export function useToolCalling({
                             return;
                         }
 
+                        if (await handleGetHardwareInfo({ parsedTool, cfg, sendPrompt, lastToolWasErrorRef })) {
+                            return;
+                        }
+
                         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ save_plan (checkpoint / mise ÃƒÆ’Ã‚Â  jour du plan) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                         if (
                             await handleSavePlan({
@@ -875,6 +897,12 @@ export function useToolCalling({
                             updateLastAssistantContent(content);
                         }
                         if (!stripped) return;
+                    } else {
+                        convTitleSetRef.current = true;
+                        const fallbackTitle = buildFallbackConversationTitle(messages).slice(0, 80);
+                        invoke("rename_conversation", { conversationId, title: fallbackTitle })
+                            .then(() => onConversationTitleChanged?.())
+                            .catch(() => {});
                     }
                 }
 

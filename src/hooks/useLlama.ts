@@ -636,8 +636,9 @@ export function useLlama() {
 
             // Limiter la génération : laisser de la place pour la réponse
             // (contextWindow - tokens du prompt estimés), plafond à 8192 par défaut
+            const availableForResponse = Math.max(256, contextWindow - estimatedUsed);
             const maxResponseTokens = Math.min(
-                Math.max(1024, contextWindow - estimatedUsed),
+                availableForResponse,
                 contextWindow > 32768 ? 16384 : 8192
             );
 

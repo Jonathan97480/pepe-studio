@@ -65,6 +65,42 @@ export async function handleSearchConversation(args: SharedArgs): Promise<boolea
     return true;
 }
 
+export async function handleGetHardwareInfo(args: SharedArgs): Promise<boolean> {
+    const { parsedTool, cfg, sendPrompt, lastToolWasErrorRef } = args;
+    if (parsedTool.get_hardware_info === undefined) return false;
+
+    try {
+        const hw = await invokeWithTimeout<{
+            total_ram_gb: number;
+            cpu_threads: number;
+            gpu_name: string;
+            gpu_vram_gb: number;
+            has_dedicated_gpu: boolean;
+        }>("get_hardware_info", {}, 10000);
+
+        const gpu = hw.has_dedicated_gpu
+            ? `${hw.gpu_name} (${hw.gpu_vram_gb.toFixed(1)} Go VRAM)`
+            : "GPU intégré / non détecté";
+
+        await sendPrompt(
+            `[Résultat outil: get_hardware_info]
+Réponds maintenant à l'utilisateur en utilisant UNIQUEMENT les données ci-dessous.
+N'ajoute aucun GPU, aucune RAM, aucun CPU ou aucune capacité qui n'apparaît pas dans ce résultat.
+Ne te présente pas. Ne décris pas tes capacités. Ne reformule pas en liste inventée.
+
+RAM: ${hw.total_ram_gb.toFixed(1)} Go
+CPU threads: ${hw.cpu_threads}
+GPU détecté: ${gpu}`,
+            cfg,
+        );
+    } catch (error) {
+        markError(lastToolWasErrorRef);
+        await sendPrompt(`[Erreur get_hardware_info]: ${error}`, cfg);
+    }
+
+    return true;
+}
+
 export async function handleSavePlan(
     args: SharedArgs & {
         conversationId: number | null;

@@ -115,7 +115,7 @@ export function useModels() {
                 // Heuristique : le mmproj partage le début du nom du modèle avant -Q4 / -it etc.
                 const modelPrefix = baseName.split(/[-_](q[0-9]|it|instruct|chat|mmproj)/i)[0];
                 return mpName.startsWith(modelPrefix);
-            }) ?? (mmprojFiles.length === 1 ? mmprojFiles[0] : "");
+            }) ?? "";
             return { path, name, ...DEFAULT_CONFIG, mmproj_path: autoMmproj, is_default: false };
         },
         [modelConfigs, mmprojFiles]

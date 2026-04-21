@@ -1,3 +1,5 @@
+import type { ModelMetadata } from "./modelMetadata";
+
 export type TurboQuantType = "none" | "q8_0" | "q4_0" | "q4_1" | "q5_0" | "q5_1";
 
 export type SamplingParams = {
@@ -105,8 +107,10 @@ export function buildLlamaArgs(config: Partial<LlamaLaunchConfig>): string[] {
  */
 export type DetectedTemplate = { chatTemplate?: string; useJinja?: boolean };
 
-export function detectChatTemplate(modelPath: string): DetectedTemplate {
+export function detectChatTemplate(modelPath: string, metadata?: Pick<ModelMetadata, "has_chat_template">): DetectedTemplate {
     const name = modelPath.split(/[\/\\]/).pop()?.toLowerCase() ?? "";
+
+    if (metadata?.has_chat_template) return {};
 
     // Qwen3 officiel : forcer --jinja même si le GGUF contient déjà un template.
     // Sans --jinja, le serveur ignore le chat_template embarqué → réponses silencieuses.
@@ -128,15 +132,10 @@ export function detectChatTemplate(modelPath: string): DetectedTemplate {
 
     if (!isMissingTemplate) return {};
 
-    // Déduire l'architecture depuis le nom du fichier
-    // Gemma 4 : utiliser --jinja (template Jinja2 natif), pas --chat-template gemma (Gemma 1/2)
+    // Déduire l'architecture depuis le nom du fichier.
+    // Heuristique volontairement conservatrice: ne forcer que les familles
+    // dont le fallback a été observé comme stable dans l'app.
     if ((name.includes("gemma-4") || name.includes("gemma4")) && isMissingTemplate) return { useJinja: true };
-    if (name.includes("gemma")) return { chatTemplate: "gemma" };
-    if (name.includes("llama-3") || name.includes("llama3")) return { chatTemplate: "llama3" };
-    if (name.includes("llama-2") || name.includes("llama2")) return { chatTemplate: "llama2" };
-    if (name.includes("mistral")) return { chatTemplate: "mistral" };
-    if (name.includes("phi-3") || name.includes("phi3")) return { chatTemplate: "phi3" };
     if (name.includes("qwen") || name.includes("chatml")) return { chatTemplate: "chatml" };
-    if (name.includes("deepseek")) return { chatTemplate: "deepseek" };
     return {};
 }

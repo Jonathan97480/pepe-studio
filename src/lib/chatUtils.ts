@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/tauri";
-export { extractWriteFileTool, normalizeToolTags, parseMessageSegments, sanitizeLlmJson } from "./toolParsing";
+export { extractSimpleTool, extractWriteFileTool, normalizeToolTags, parseMessageSegments, sanitizeLlmJson } from "./toolParsing";
 
 export type ChatMode = "ask" | "plan" | "agent";
 

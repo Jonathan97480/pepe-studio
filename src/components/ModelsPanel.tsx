@@ -6,6 +6,7 @@ import { useModels, type ModelConfig, parseSamplingJson } from "../hooks/useMode
 import { useModelSettings, type TurboQuantType, type SamplingSettings } from "../context/ModelSettingsContext";
 import { buildLlamaArgs, detectChatTemplate, type DetectedTemplate } from "../lib/llamaWrapper";
 import { autoConfigureFromHardware, type HardwareInfo, type AutoMode } from "../lib/hardwareConfig";
+import { inspectModelMetadata, type ModelMetadata } from "../lib/modelMetadata";
 import PersonalityPicker from "./PersonalityPicker";
 
 /* ── Composants helpers pour les sliders/inputs de sampling ── */
@@ -134,12 +135,19 @@ export default function ModelsPanel() {
         setActionError(null);
         try {
             let config = getOrCreateDraft(path);
+            let metadata: ModelMetadata | undefined;
+
+            try {
+                metadata = await inspectModelMetadata(path);
+            } catch (metaErr) {
+                console.warn("[ModelsPanel] Inspection GGUF échouée:", metaErr);
+            }
 
             // Si n_gpu_layers n'a jamais été configuré (= 0), auto-détecter le hardware
             if (config.n_gpu_layers === 0 && config.threads <= 0) {
                 try {
                     const hw = await invoke<HardwareInfo>("get_hardware_info");
-                    const auto = autoConfigureFromHardware(hw, "balanced");
+                    const auto = autoConfigureFromHardware(hw, "balanced", metadata);
                     config = { ...config, ...auto };
                     updateDraft(path, auto);
                     setAutoDetectNotes((prev) => ({ ...prev, [path]: ["⚡ Auto-détecté au premier lancement", ...auto.notes] }));
@@ -158,7 +166,7 @@ export default function ModelsPanel() {
                 ...((): DetectedTemplate => {
                     if (config.chat_template === "jinja") return { useJinja: true };
                     if (config.chat_template !== "") return { chatTemplate: config.chat_template };
-                    return detectChatTemplate(path);
+                    return detectChatTemplate(path, metadata);
                 })(),
             });
             console.log("[ModelsPanel] Lancement llama-server avec args:", args.join(" "));
@@ -181,8 +189,11 @@ export default function ModelsPanel() {
         setAutoDetecting(path);
         setActionError(null);
         try {
-            const hw = await invoke<HardwareInfo>("get_hardware_info");
-            const cfg = autoConfigureFromHardware(hw, mode);
+            const [hw, metadata] = await Promise.all([
+                invoke<HardwareInfo>("get_hardware_info"),
+                inspectModelMetadata(path),
+            ]);
+            const cfg = autoConfigureFromHardware(hw, mode, metadata);
             updateDraft(path, {
                 context_window: cfg.context_window,
                 turbo_quant: cfg.turbo_quant,

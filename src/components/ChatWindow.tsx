@@ -8,7 +8,9 @@ import { type PatchResult } from "../lib/skillPatcher";
 import { useModelSettings, type TurboQuantType } from "../context/ModelSettingsContext";
 import { useSkills } from "../context/SkillsContext";
 import type { LlamaLaunchConfig } from "../lib/llamaWrapper";
+import { detectChatTemplate, type DetectedTemplate } from "../lib/llamaWrapper";
 import type { ModelConfig } from "../hooks/useModels";
+import { parseSamplingJson } from "../hooks/useModels";
 import { stripSystemTags, type ChatMode } from "../lib/chatUtils";
 import { MessageBubble } from "./chat/MessageBubble";
 import { ChatComposer } from "./chat/ChatComposer";
@@ -18,6 +20,8 @@ import { useAutoCompact } from "../hooks/useAutoCompact";
 import { useBuildMachineContext } from "../hooks/useBuildMachineContext";
 import { useToolCalling } from "../hooks/useToolCalling";
 import { useFileAttachments } from "../hooks/useFileAttachments";
+import { inspectModelMetadata } from "../lib/modelMetadata";
+import { autoConfigureFromHardware, type HardwareInfo } from "../lib/hardwareConfig";
 
 export default function ChatWindow({
     convRequest,
@@ -152,6 +156,7 @@ export default function ChatWindow({
         deepThinkingEnabled,
         isEnabled,
         chatModeRef,
+        modelPath,
     });
 
     const { compactToast } = useAutoCompact({
@@ -236,7 +241,7 @@ export default function ChatWindow({
         setIsContextReady(false);
         buildMachineContext();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [disabled, chatMode, convRequest?.key]);
+    }, [disabled, chatMode, convRequest?.key, modelPath, deepThinkingEnabled]);
 
     // Hook de gestion des tool calls (dispatche outils + sauvegarde messages + TTS)
     const speakText = (text: string) => {
@@ -346,31 +351,56 @@ export default function ChatWindow({
                 return;
             }
             try {
+                const metadata = await inspectModelMetadata(defaultModel.path).catch(() => undefined);
+                const savedSampling = parseSamplingJson(defaultModel.sampling_json);
+                let runtimeConfig: ModelConfig = defaultModel;
+                if (defaultModel.n_gpu_layers === 0 && defaultModel.threads <= 0) {
+                    const hw = await invoke<HardwareInfo>("get_hardware_info");
+                    const auto = autoConfigureFromHardware(hw, "balanced", metadata);
+                    runtimeConfig = {
+                        ...defaultModel,
+                        context_window: auto.context_window,
+                        turbo_quant: auto.turbo_quant,
+                        n_gpu_layers: auto.n_gpu_layers,
+                        threads: auto.threads,
+                    };
+                }
                 await loadModel({
-                    modelPath: defaultModel.path,
-                    temperature: defaultModel.temperature,
-                    contextWindow: defaultModel.context_window,
-                    systemPrompt: defaultModel.system_prompt,
-                    turboQuant: defaultModel.turbo_quant as TurboQuantType,
-                    mmprojPath: defaultModel.mmproj_path || undefined,
+                    modelPath: runtimeConfig.path,
+                    temperature: runtimeConfig.temperature,
+                    contextWindow: runtimeConfig.context_window,
+                    systemPrompt: runtimeConfig.system_prompt,
+                    turboQuant: runtimeConfig.turbo_quant as TurboQuantType,
+                    mmprojPath: runtimeConfig.mmproj_path || undefined,
+                    nGpuLayers: runtimeConfig.n_gpu_layers > 0 ? runtimeConfig.n_gpu_layers : undefined,
+                    threads: runtimeConfig.threads > 0 ? runtimeConfig.threads : undefined,
+                    sampling: savedSampling,
+                    ...((): DetectedTemplate => {
+                        if (runtimeConfig.chat_template === "jinja") return { useJinja: true };
+                        if (runtimeConfig.chat_template !== "") return { chatTemplate: runtimeConfig.chat_template };
+                        return detectChatTemplate(runtimeConfig.path, metadata);
+                    })(),
                 });
                 setIsModelLoaded(true);
-                setLoadedModelPath(defaultModel.path);
-                setModelPath(defaultModel.path);
-                setTemperature(defaultModel.temperature);
-                setContextWindow(defaultModel.context_window);
-                setSystemPrompt(defaultModel.system_prompt);
-                setTurboQuant(defaultModel.turbo_quant as TurboQuantType);
+                setLoadedModelPath(runtimeConfig.path);
+                setModelPath(runtimeConfig.path);
+                setTemperature(runtimeConfig.temperature);
+                setContextWindow(runtimeConfig.context_window);
+                setSystemPrompt(runtimeConfig.system_prompt);
+                setTurboQuant(runtimeConfig.turbo_quant as TurboQuantType);
+                setThinkingEnabled(thinkingEnabled);
                 effectiveConfig = {
-                    modelPath: defaultModel.path,
-                    temperature: defaultModel.temperature,
-                    contextWindow: defaultModel.context_window,
+                    modelPath: runtimeConfig.path,
+                    temperature: runtimeConfig.temperature,
+                    contextWindow: runtimeConfig.context_window,
                     systemPrompt: machineContext
-                        ? machineContext + (defaultModel.system_prompt ? "\n\n" + defaultModel.system_prompt : "")
-                        : defaultModel.system_prompt,
-                    turboQuant: defaultModel.turbo_quant as TurboQuantType,
-                    mmprojPath: defaultModel.mmproj_path || undefined,
-                    sampling,
+                        ? machineContext + (runtimeConfig.system_prompt ? "\n\n" + runtimeConfig.system_prompt : "")
+                        : runtimeConfig.system_prompt,
+                    turboQuant: runtimeConfig.turbo_quant as TurboQuantType,
+                    mmprojPath: runtimeConfig.mmproj_path || undefined,
+                    nGpuLayers: runtimeConfig.n_gpu_layers > 0 ? runtimeConfig.n_gpu_layers : undefined,
+                    threads: runtimeConfig.threads > 0 ? runtimeConfig.threads : undefined,
+                    sampling: savedSampling,
                     thinkingEnabled,
                 };
             } catch (e: unknown) {
@@ -403,7 +433,7 @@ export default function ChatWindow({
             }
             if (!convTitleSetRef.current) {
                 const titleInstr =
-                    "\n\n[TITRE CONVERSATION — instruction système, invisible pour l'utilisateur]\nSur ton PREMIER message uniquement, place OBLIGATOIREMENT cette balise AVANT ta réponse : <conv_title>Titre 4-6 mots</conv_title>\nIMPORATNT : la balise ET ta réponse complète doivent être dans le MÊME message — ne génère pas la balise seule.\nFormat attendu : <conv_title>Aide rédaction article</conv_title>\n\nBonjour ! Je vais vous aider à...\nN'utilise plus jamais cette balise après ce premier message.";
+                    "\n\n[TITRE CONVERSATION — instruction système, invisible pour l'utilisateur]\nSur ton PREMIER message uniquement, place cette balise AVANT ta réponse : <conv_title>Titre 4-6 mots</conv_title>\nIMPORTANT : la balise et ta réponse complète doivent être dans le MÊME message.\nFormat attendu : <conv_title>Aide rédaction article</conv_title>\nAprès la balise, réponds normalement à la demande actuelle.\nN'utilise plus jamais cette balise après ce premier message.";
                 effectiveConfig = {
                     ...effectiveConfig,
                     systemPrompt: (effectiveConfig.systemPrompt ?? "") + titleInstr,

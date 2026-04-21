@@ -1,4 +1,5 @@
 import type { TurboQuantType } from "./llamaWrapper";
+import type { ModelMetadata } from "./modelMetadata";
 
 export type HardwareInfo = {
     total_ram_gb: number;
@@ -19,6 +20,80 @@ export type AutoConfig = {
 /** Mode d'auto-configuration */
 export type AutoMode = "gpu_only" | "balanced" | "max_context";
 
+function roundContextWindow(value: number): number {
+    if (!Number.isFinite(value) || value <= 2048) return 2048;
+    return Math.max(2048, Math.floor(value / 2048) * 2048);
+}
+
+function getKvBytesPerValue(type: TurboQuantType): number {
+    switch (type) {
+        case "q4_0":
+        case "q4_1":
+            return 0.5;
+        case "q5_0":
+        case "q5_1":
+            return 0.625;
+        case "q8_0":
+            return 1;
+        case "none":
+        default:
+            return 2;
+    }
+}
+
+function getOffloadRatio(metadata: Pick<ModelMetadata, "block_count"> | undefined, nGpuLayers: number): number {
+    if (nGpuLayers <= 0) return 0;
+    if (!metadata?.block_count || metadata.block_count <= 0) return nGpuLayers >= 999 ? 1 : 0.75;
+    if (nGpuLayers >= 999) return 1;
+    return Math.max(0, Math.min(1, nGpuLayers / (metadata.block_count + 1)));
+}
+
+function estimateModelMemoryGb(metadata: Pick<ModelMetadata, "file_size_bytes"> | undefined): number {
+    return metadata?.file_size_bytes ? metadata.file_size_bytes / (1024 ** 3) : 0;
+}
+
+function capContextToModel(
+    desired: number,
+    hw: HardwareInfo,
+    metadata: ModelMetadata | undefined,
+    nGpuLayers: number,
+    turboQuant: TurboQuantType,
+): number {
+    if (!metadata) return desired;
+    const nativeCap = metadata.context_length > 0 ? metadata.context_length : desired;
+    const effectiveKeyLength = metadata.key_length || metadata.embedding_length || 0;
+    const effectiveValueLength = metadata.value_length || metadata.key_length || metadata.embedding_length || 0;
+    const effectiveHeadsKv = metadata.head_count_kv || 0;
+    const effectiveLayers = metadata.block_count || 0;
+
+    if (effectiveKeyLength <= 0 || effectiveValueLength <= 0 || effectiveHeadsKv <= 0 || effectiveLayers <= 0) {
+        return Math.min(desired, nativeCap);
+    }
+
+    const bytesPerValue = getKvBytesPerValue(turboQuant);
+    const kvBytesPerToken =
+        effectiveLayers * effectiveHeadsKv * (effectiveKeyLength + effectiveValueLength) * bytesPerValue;
+    if (!Number.isFinite(kvBytesPerToken) || kvBytesPerToken <= 0) {
+        return Math.min(desired, nativeCap);
+    }
+
+    const modelMemoryGb = estimateModelMemoryGb(metadata);
+    const offloadRatio = getOffloadRatio(metadata, nGpuLayers);
+    const modelVramGb = modelMemoryGb * offloadRatio;
+    const modelRamGb = modelMemoryGb * (1 - offloadRatio);
+    const availableVramGb = Math.max(0.5, hw.gpu_vram_gb - modelVramGb - 1.5);
+    const availableRamGb = Math.max(1, hw.total_ram_gb - modelRamGb - 6);
+    const gpuKvCap = offloadRatio > 0
+        ? (availableVramGb * 1024 ** 3) / (kvBytesPerToken * offloadRatio)
+        : Number.POSITIVE_INFINITY;
+    const cpuKvCap = offloadRatio < 1
+        ? (availableRamGb * 1024 ** 3) / (kvBytesPerToken * Math.max(0.15, 1 - offloadRatio))
+        : Number.POSITIVE_INFINITY;
+
+    const memoryCap = Math.max(2048, Math.min(gpuKvCap, cpuKvCap, nativeCap));
+    return Math.min(desired, roundContextWindow(memoryCap));
+}
+
 /**
  * Calcule la configuration optimale de llama-server
  * à partir des informations matérielles détectées.
@@ -28,7 +103,11 @@ export type AutoMode = "gpu_only" | "balanced" | "max_context";
  * - balanced    : compromis vitesse/contexte (par défaut, équivalent à l'ancien comportement)
  * - max_context : exploite RAM + VRAM pour maximiser le contexte, plus lent
  */
-export function autoConfigureFromHardware(hw: HardwareInfo, mode: AutoMode = "balanced"): AutoConfig {
+export function autoConfigureFromHardware(
+    hw: HardwareInfo,
+    mode: AutoMode = "balanced",
+    metadata?: ModelMetadata,
+): AutoConfig {
     const notes: string[] = [];
     const modeName = mode === "gpu_only" ? "🎮 GPU seul"
         : mode === "max_context" ? "📐 Contexte max"
@@ -80,7 +159,11 @@ export function autoConfigureFromHardware(hw: HardwareInfo, mode: AutoMode = "ba
         notes.push(`Contexte : ${context_window.toLocaleString()} tokens (tout en VRAM)`);
         notes.push(`CPU : ${threads} threads`);
 
-        return { context_window, turbo_quant, n_gpu_layers, threads, notes };
+        const cappedContext = capContextToModel(context_window, hw, metadata, n_gpu_layers, turbo_quant);
+        if (cappedContext < context_window) {
+            notes.push(`Contexte bridé par le modèle: ${cappedContext.toLocaleString()} tokens`);
+        }
+        return { context_window: cappedContext, turbo_quant, n_gpu_layers, threads, notes };
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -134,7 +217,11 @@ export function autoConfigureFromHardware(hw: HardwareInfo, mode: AutoMode = "ba
         notes.push(`CPU : ${threads} threads`);
         notes.push("⚠ Génération plus lente (KV cache partagé RAM/VRAM)");
 
-        return { context_window, turbo_quant, n_gpu_layers, threads, notes };
+        const cappedContext = capContextToModel(context_window, hw, metadata, n_gpu_layers, turbo_quant);
+        if (cappedContext < context_window) {
+            notes.push(`Contexte bridé par mémoire réelle du modèle: ${cappedContext.toLocaleString()} tokens`);
+        }
+        return { context_window: cappedContext, turbo_quant, n_gpu_layers, threads, notes };
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -189,5 +276,10 @@ export function autoConfigureFromHardware(hw: HardwareInfo, mode: AutoMode = "ba
 
     notes.push(`CPU : ${hw.cpu_threads} threads logiques → ${threads} threads alloués à llama`);
 
-    return { context_window, turbo_quant, n_gpu_layers, threads, notes };
+    const cappedContext = capContextToModel(context_window, hw, metadata, n_gpu_layers, turbo_quant);
+    if (cappedContext < context_window) {
+        notes.push(`Contexte bridé par surcharge modèle/KV: ${cappedContext.toLocaleString()} tokens`);
+    }
+
+    return { context_window: cappedContext, turbo_quant, n_gpu_layers, threads, notes };
 }

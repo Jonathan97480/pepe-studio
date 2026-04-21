@@ -9,6 +9,7 @@ mod http_client;
 mod hw_info;
 mod llama_sidecar;
 mod mcp;
+mod model_metadata;
 mod scraper;
 mod search;
 mod skills;
@@ -37,6 +38,7 @@ use mcp::{
     call_mcp_tool, cleanup_all_mcp_servers, create_mcp_server, list_mcp_servers, start_mcp_server,
     stop_mcp_server, McpState,
 };
+use model_metadata::inspect_model_metadata;
 use scraper::scrape_url;
 use search::search_web;
 use skills::{
@@ -87,6 +89,7 @@ fn main() {
             delete_document,
             get_document_chunks,
             get_hardware_info,
+            inspect_model_metadata,
             run_shell_command,
             write_file,
             patch_file,
