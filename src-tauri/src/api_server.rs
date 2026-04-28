@@ -13,7 +13,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use futures_util::{stream, TryStreamExt};
+
 use serde_json::{json, Value};
 use std::sync::Mutex;
 use tauri::Manager;
@@ -203,19 +203,12 @@ async fn chat_completions_handler(
         }
     }
 
-    // Mode stream:
-    // - par défaut: passthrough direct pour avoir la réflexion en continu (temps réel)
-    // - si le client envoie explicitement des tools/tool_choice: boucle outils + SSE synthétique
-    let explicit_tools_requested = body.get("tools").is_some() || body.get("tool_choice").is_some();
-
-    if !explicit_tools_requested {
-        return proxy_stream_passthrough(&state, body).await;
-    }
-
-    match chat_with_tools_loop(&state, body.clone()).await {
-        Ok(final_json) => completion_to_sse_response(final_json),
-        Err(_) => proxy_stream_passthrough(&state, body).await,
-    }
+    // Mode stream: approche hybride —
+    // - injecte les outils dans la requête
+    // - proxifie le stream natif de llama.cpp (réflexion en temps réel)
+    // - intercepte finish_reason=tool_calls en cours de route
+    // - exécute les outils puis relance un nouveau stream pour la réponse finale
+    chat_with_tools_stream(&state, body).await
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1036,135 +1029,285 @@ fn append_message(req_body: &mut Value, msg: Value) {
     }
 }
 
-fn completion_to_sse_response(final_json: Value) -> Response {
-    let id = final_json
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("chatcmpl-pepe-stream");
-    let model = final_json
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("pepe-studio-model");
-    let created = final_json
-        .get("created")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    let message = final_json
-        .get("choices")
-        .and_then(|v| v.get(0))
-        .and_then(|v| v.get("message"))
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let content = message
-        .get("content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let reasoning = message
-        .get("reasoning_content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+// ── Structs pour l'accumulation de tool_calls en streaming ───────────────────
 
-    let event_role = json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [{ "index": 0, "delta": { "role": "assistant" }, "finish_reason": Value::Null }]
-    });
-    let mut lines = vec![format!("data: {}\n\n", event_role)];
-
-    for piece in split_text_chunks(reasoning, 180) {
-        let event_reasoning = json!({
-            "id": id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [{ "index": 0, "delta": { "reasoning_content": piece }, "finish_reason": Value::Null }]
-        });
-        lines.push(format!("data: {}\n\n", event_reasoning));
-    }
-
-    for piece in split_text_chunks(content, 180) {
-        let event_content = json!({
-            "id": id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [{ "index": 0, "delta": { "content": piece }, "finish_reason": Value::Null }]
-        });
-        lines.push(format!("data: {}\n\n", event_content));
-    }
-
-    let event_done = json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
-    });
-    lines.push(format!("data: {}\n\n", event_done));
-    lines.push("data: [DONE]\n\n".to_string());
-    let byte_stream = stream::iter(
-        lines
-            .into_iter()
-            .map(|s| Ok::<Vec<u8>, std::io::Error>(s.into_bytes())),
-    );
-
-    let mut response = Response::new(axum::body::boxed(StreamBody::new(byte_stream)));
-    *response.status_mut() = StatusCode::OK;
-    response.headers_mut().insert(
-        "content-type",
-        HeaderValue::from_static("text/event-stream"),
-    );
-    response
-        .headers_mut()
-        .insert("cache-control", HeaderValue::from_static("no-cache"));
-    response
-        .headers_mut()
-        .insert("x-accel-buffering", HeaderValue::from_static("no"));
-    response
+#[derive(Default, Clone)]
+struct PartialToolCall {
+    id: String,
+    name: String,
+    arguments: String,
 }
 
-fn split_text_chunks(input: &str, chunk_size: usize) -> Vec<String> {
-    if input.is_empty() {
-        return vec![];
-    }
-    let chars: Vec<char> = input.chars().collect();
-    chars
-        .chunks(chunk_size.max(1))
-        .map(|chunk| chunk.iter().collect::<String>())
-        .collect()
-}
-
-async fn proxy_stream_passthrough(state: &ProxyState, body: Value) -> Response {
-    let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{}/v1/chat/completions", state.llama_port);
-
-    let resp = match client.post(&url).json(&body).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": {
-                        "message": e.to_string(),
-                        "type": "proxy_error",
-                        "code": "bad_gateway"
+fn accumulate_tool_call_delta(calls: &mut Vec<PartialToolCall>, delta_calls: &Value) {
+    if let Some(arr) = delta_calls.as_array() {
+        for delta_call in arr {
+            let index = delta_call
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            while calls.len() <= index {
+                calls.push(PartialToolCall::default());
+            }
+            let call = &mut calls[index];
+            if let Some(id) = delta_call.get("id").and_then(|v| v.as_str()) {
+                if !id.is_empty() {
+                    call.id = id.to_string();
+                }
+            }
+            if let Some(func) = delta_call.get("function") {
+                if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                    if !name.is_empty() {
+                        call.name = name.to_string();
                     }
-                })),
-            )
-                .into_response();
+                }
+                if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
+                    call.arguments.push_str(args);
+                }
+            }
         }
+    }
+}
+
+fn build_assistant_tool_calls_message(calls: &[PartialToolCall], content: &str) -> Value {
+    let tool_calls: Vec<Value> = calls
+        .iter()
+        .enumerate()
+        .map(|(i, call)| {
+            json!({
+                "id": if call.id.is_empty() { format!("call_{}", i) } else { call.id.clone() },
+                "type": "function",
+                "function": {
+                    "name": call.name.clone(),
+                    "arguments": call.arguments.clone()
+                }
+            })
+        })
+        .collect();
+    let content_val: Value = if content.is_empty() {
+        Value::Null
+    } else {
+        json!(content)
     };
+    json!({
+        "role": "assistant",
+        "content": content_val,
+        "tool_calls": tool_calls
+    })
+}
 
-    let status =
-        StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let byte_stream = resp
-        .bytes_stream()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
+// ── Hybrid Stream: stream natif + interception tool_calls + relance ───────────
+//
+// Flux :
+//  1. Injecte les schémas d'outils dans la requête
+//  2. Proxifie le stream llama.cpp → client (réflexion en temps réel)
+//  3. Intercepte les deltas tool_calls (pas transmis au client)
+//  4. Quand finish_reason=tool_calls : exécute les outils, met à jour messages, relance
+//  5. Quand finish_reason=stop       : transmet le chunk stop + [DONE] → termine
 
-    let mut response = Response::new(axum::body::boxed(StreamBody::new(byte_stream)));
-    *response.status_mut() = status;
+async fn chat_with_tools_stream(state: &ProxyState, mut req_body: Value) -> Response {
+    ensure_tools_are_available(&mut req_body);
+    req_body["stream"] = Value::Bool(true);
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(128);
+    let state_clone = state.clone();
+
+    tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        let url = format!(
+            "http://127.0.0.1:{}/v1/chat/completions",
+            state_clone.llama_port
+        );
+
+        use futures_util::StreamExt;
+
+        'outer: for _step in 0..5 {
+            let resp = match client.post(&url).json(&req_body).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    let msg = format!(
+                        "data: {}\n\n",
+                        json!({"error": {"message": e.to_string(), "type": "proxy_error"}})
+                    );
+                    let _ = tx.send(Ok(msg.into_bytes())).await;
+                    break 'outer;
+                }
+            };
+
+            let mut byte_stream = resp.bytes_stream();
+            let mut buffer = String::new();
+            let mut partial_tool_calls: Vec<PartialToolCall> = Vec::new();
+            let mut assistant_content = String::new();
+            let mut tool_calls_executed = false;
+
+            'drain: loop {
+                match byte_stream.next().await {
+                    None => break 'drain,
+                    Some(Err(e)) => {
+                        eprintln!("[api_server] stream error: {e}");
+                        break 'drain;
+                    }
+                    Some(Ok(chunk)) => {
+                        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                        loop {
+                            let Some(nl_pos) = buffer.find('\n') else {
+                                break; // no complete line yet, wait for next chunk
+                            };
+                            let raw_line = buffer[..nl_pos].to_string();
+                            buffer = buffer[nl_pos + 1..].to_string();
+                            let line = raw_line.trim_end_matches('\r');
+
+                            if line == "data: [DONE]" {
+                                if !tool_calls_executed {
+                                    let _ = tx.send(Ok(b"data: [DONE]\n\n".to_vec())).await;
+                                    break 'outer;
+                                } else {
+                                    break 'drain; // continue 'outer for next LLM step
+                                }
+                            }
+
+                            let data = match line.strip_prefix("data: ") {
+                                Some(d) if !d.is_empty() => d,
+                                _ => continue,
+                            };
+
+                            let event = match serde_json::from_str::<Value>(data) {
+                                Ok(e) => e,
+                                Err(_) => continue,
+                            };
+
+                            let delta = event
+                                .get("choices")
+                                .and_then(|c| c.get(0))
+                                .and_then(|c0| c0.get("delta"))
+                                .cloned()
+                                .unwrap_or_else(|| json!({}));
+
+                            let finish_reason = event
+                                .get("choices")
+                                .and_then(|c| c.get(0))
+                                .and_then(|c0| c0.get("finish_reason"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+
+                            // Accumulate tool_calls (don't forward to client)
+                            if let Some(tc) = delta.get("tool_calls") {
+                                accumulate_tool_call_delta(&mut partial_tool_calls, tc);
+                            }
+
+                            // Build forwarded delta (reasoning + content + role only)
+                            let mut fwd_delta = json!({});
+                            let mut should_forward = false;
+
+                            if let Some(role) = delta.get("role").and_then(|v| v.as_str()) {
+                                fwd_delta["role"] = json!(role);
+                                should_forward = true;
+                            }
+                            if let Some(rc) =
+                                delta.get("reasoning_content").and_then(|v| v.as_str())
+                            {
+                                if !rc.is_empty() {
+                                    fwd_delta["reasoning_content"] = json!(rc);
+                                    should_forward = true;
+                                }
+                            }
+                            if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
+                                if !c.is_empty() {
+                                    fwd_delta["content"] = json!(c);
+                                    assistant_content.push_str(c);
+                                    should_forward = true;
+                                }
+                            }
+
+                            // Forward to client if we have content/reasoning/role
+                            if should_forward {
+                                let mut fwd_event = event.clone();
+                                if let Some(choices) = fwd_event.get_mut("choices") {
+                                    if let Some(c0) = choices.get_mut(0) {
+                                        c0["delta"] = fwd_delta;
+                                        c0["finish_reason"] = Value::Null;
+                                    }
+                                }
+                                let fwd_str = format!("data: {}\n\n", fwd_event);
+                                let _ = tx.send(Ok(fwd_str.into_bytes())).await;
+                            }
+
+                            match finish_reason.as_deref() {
+                                Some("tool_calls") => {
+                                    // Execute all tool calls and append results to messages
+                                    let assistant_msg = build_assistant_tool_calls_message(
+                                        &partial_tool_calls,
+                                        &assistant_content,
+                                    );
+                                    append_message(&mut req_body, assistant_msg);
+
+                                    for call in &partial_tool_calls {
+                                        let args =
+                                            serde_json::from_str::<Value>(&call.arguments)
+                                                .unwrap_or_else(|_| json!({}));
+                                        let result =
+                                            execute_tool(&state_clone, &call.name, &args).await;
+                                        let content_str = match result {
+                                            Ok(v) => {
+                                                json!({"ok": true, "result": v}).to_string()
+                                            }
+                                            Err(e) => {
+                                                json!({"ok": false, "error": e}).to_string()
+                                            }
+                                        };
+                                        append_message(
+                                            &mut req_body,
+                                            json!({
+                                                "role": "tool",
+                                                "tool_call_id": call.id,
+                                                "content": content_str
+                                            }),
+                                        );
+                                    }
+
+                                    partial_tool_calls.clear();
+                                    assistant_content.clear();
+                                    tool_calls_executed = true;
+                                    // Continue draining until [DONE] before relaunching
+                                }
+                                Some("stop") | Some("length") => {
+                                    // Forward the stop chunk and [DONE] then exit
+                                    let mut stop_event = event.clone();
+                                    if let Some(choices) = stop_event.get_mut("choices") {
+                                        if let Some(c0) = choices.get_mut(0) {
+                                            c0["delta"] = json!({});
+                                            c0["finish_reason"] =
+                                                json!(finish_reason.as_deref().unwrap_or("stop"));
+                                        }
+                                    }
+                                    let stop_str = format!("data: {}\n\n", stop_event);
+                                    let _ = tx.send(Ok(stop_str.into_bytes())).await;
+                                    let _ = tx.send(Ok(b"data: [DONE]\n\n".to_vec())).await;
+                                    break 'outer;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !tool_calls_executed {
+                // Stream ended without proper finish_reason (unexpected EOF)
+                let _ = tx.send(Ok(b"data: [DONE]\n\n".to_vec())).await;
+                break 'outer;
+            }
+            // Continue 'outer to start next LLM call with tool results
+        }
+    });
+
+    // Build streaming response from mpsc channel
+    let recv_stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    });
+
+    let mut response = Response::new(axum::body::boxed(StreamBody::new(recv_stream)));
+    *response.status_mut() = StatusCode::OK;
     response.headers_mut().insert(
         "content-type",
         HeaderValue::from_static("text/event-stream"),
