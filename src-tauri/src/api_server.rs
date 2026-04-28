@@ -1242,18 +1242,13 @@ async fn chat_with_tools_stream(state: &ProxyState, mut req_body: Value) -> Resp
                                     append_message(&mut req_body, assistant_msg);
 
                                     for call in &partial_tool_calls {
-                                        let args =
-                                            serde_json::from_str::<Value>(&call.arguments)
-                                                .unwrap_or_else(|_| json!({}));
+                                        let args = serde_json::from_str::<Value>(&call.arguments)
+                                            .unwrap_or_else(|_| json!({}));
                                         let result =
                                             execute_tool(&state_clone, &call.name, &args).await;
                                         let content_str = match result {
-                                            Ok(v) => {
-                                                json!({"ok": true, "result": v}).to_string()
-                                            }
-                                            Err(e) => {
-                                                json!({"ok": false, "error": e}).to_string()
-                                            }
+                                            Ok(v) => json!({"ok": true, "result": v}).to_string(),
+                                            Err(e) => json!({"ok": false, "error": e}).to_string(),
                                         };
                                         append_message(
                                             &mut req_body,
