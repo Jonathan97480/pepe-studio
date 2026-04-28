@@ -25,6 +25,7 @@ L'IA ne se contente plus de répondre — elle **agit**.
 - **RAG + documents** — Indexation et recherche dans des fichiers PDF/texte
 - **MCP (Model Context Protocol)** — Connexion à des serveurs MCP externes
 - **Skills système** — Scripts PowerShell réutilisables créés et gérés par l'IA
+- **API OpenAI-compatible (Open WebUI)** — Endpoint `/v1` local avec streaming SSE, réflexion en temps réel et exécution d'outils
 - **TTS** — Lecture vocale des réponses de l'assistant
 - **Modes Ask / Plan / Agent** — Contrôle fin du niveau d'autonomie de l'IA
 
@@ -145,6 +146,14 @@ pepe-studio/
 - `src-tauri/src/main.rs` expose les commandes Tauri.
 - `src-tauri/src/db.rs` gère la persistance SQLite.
 - `src-tauri/src/terminal_manager.rs`, `scraper.rs`, `mcp.rs` et `llama_sidecar.rs` couvrent respectivement terminal, web, MCP et runtime modèle.
+- `src-tauri/src/api_server.rs` expose une API OpenAI-compatible (`/v1/models`, `/v1/chat/completions`) pour connecter Open WebUI.
+
+### Intégration Open WebUI
+
+- URL API : `http://localhost:8766/v1`
+- Endpoint principal : `POST /v1/chat/completions`
+- Fonctionnement stream : la réflexion (`reasoning_content`) est diffusée en continu tout en conservant l'exécution des outils (tool calls) côté proxy.
+- Mode non-stream : boucle locale d'outils puis réponse finale JSON compatible OpenAI.
 
 ### Flux d'un tool call
 
