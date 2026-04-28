@@ -20,6 +20,20 @@ export type AutoConfig = {
 /** Mode d'auto-configuration */
 export type AutoMode = "gpu_only" | "balanced" | "max_context";
 
+export type MemoryEstimate = {
+    model_vram_gb: number;
+    model_ram_gb: number;
+    kv_vram_gb: number;
+    kv_ram_gb: number;
+    total_vram_gb: number;
+    total_ram_gb: number;
+    available_vram_gb: number;
+    available_ram_gb: number;
+    has_metadata: boolean;
+    has_gpu: boolean;
+    offload_ratio: number;
+};
+
 function roundContextWindow(value: number): number {
     if (!Number.isFinite(value) || value <= 2048) return 2048;
     return Math.max(2048, Math.floor(value / 2048) * 2048);
@@ -50,6 +64,97 @@ function getOffloadRatio(metadata: Pick<ModelMetadata, "block_count"> | undefine
 
 function estimateModelMemoryGb(metadata: Pick<ModelMetadata, "file_size_bytes"> | undefined): number {
     return metadata?.file_size_bytes ? metadata.file_size_bytes / (1024 ** 3) : 0;
+}
+
+function clampGpuLayers(value: number, metadata?: Pick<ModelMetadata, "block_count">): number {
+    const maxLayers = metadata?.block_count && metadata.block_count > 0
+        ? metadata.block_count
+        : Number.POSITIVE_INFINITY;
+    return Math.max(0, Math.min(Math.floor(value), maxLayers));
+}
+
+function estimateGpuLayerFit(
+    hw: HardwareInfo,
+    metadata: Pick<ModelMetadata, "file_size_bytes" | "block_count"> | undefined,
+    requestedLayers: number,
+    mode: AutoMode,
+): number {
+    if (!metadata?.file_size_bytes || !metadata.block_count || metadata.block_count <= 0) {
+        return requestedLayers;
+    }
+    if (!hw.has_dedicated_gpu || hw.gpu_vram_gb < 1) {
+        return 0;
+    }
+
+    const layerCountWithOutput = metadata.block_count + 1;
+    const layerFootprintGb = (metadata.file_size_bytes / (1024 ** 3)) / layerCountWithOutput;
+    if (!Number.isFinite(layerFootprintGb) || layerFootprintGb <= 0) {
+        return requestedLayers;
+    }
+
+    const reserveGb = mode === "gpu_only" ? 2.0 : mode === "max_context" ? 3.0 : 2.5;
+    const budgetRatio = mode === "gpu_only" ? 0.9 : mode === "max_context" ? 0.45 : 0.65;
+    const budgetGb = Math.max(0, hw.gpu_vram_gb * budgetRatio - reserveGb);
+    const fittedLayers = Math.floor(budgetGb / layerFootprintGb);
+
+    if (requestedLayers >= 999) {
+        return clampGpuLayers(fittedLayers, metadata);
+    }
+
+    return clampGpuLayers(Math.min(requestedLayers, fittedLayers), metadata);
+}
+
+/**
+ * Estime l'utilisation mémoire (RAM + VRAM) pour une configuration donnée.
+ * Pure, synchrone — réutilise les helpers de capContextToModel.
+ */
+export function estimateMemoryUsage(
+    hw: HardwareInfo,
+    metadata: ModelMetadata | undefined,
+    contextWindow: number,
+    nGpuLayers: number,
+    turboQuant: TurboQuantType,
+): MemoryEstimate {
+    const modelMemoryGb = estimateModelMemoryGb(metadata);
+    const offloadRatio = getOffloadRatio(metadata, nGpuLayers);
+    const modelVramGb = modelMemoryGb * offloadRatio;
+    const modelRamGb = modelMemoryGb * (1 - offloadRatio);
+
+    let kvVramGb = 0;
+    let kvRamGb = 0;
+
+    if (metadata) {
+        const effectiveKeyLength = metadata.key_length || metadata.embedding_length || 0;
+        const effectiveValueLength = metadata.value_length || metadata.key_length || metadata.embedding_length || 0;
+        const effectiveHeadsKv = metadata.head_count_kv || 0;
+        const effectiveLayers = metadata.block_count || 0;
+
+        if (effectiveKeyLength > 0 && effectiveValueLength > 0 && effectiveHeadsKv > 0 && effectiveLayers > 0) {
+            const bytesPerValue = getKvBytesPerValue(turboQuant);
+            const kvBytesPerToken =
+                effectiveLayers * effectiveHeadsKv * (effectiveKeyLength + effectiveValueLength) * bytesPerValue;
+
+            if (Number.isFinite(kvBytesPerToken) && kvBytesPerToken > 0) {
+                const totalKvGb = (kvBytesPerToken * contextWindow) / (1024 ** 3);
+                kvVramGb = totalKvGb * offloadRatio;
+                kvRamGb = totalKvGb * (1 - offloadRatio);
+            }
+        }
+    }
+
+    return {
+        model_vram_gb: modelVramGb,
+        model_ram_gb: modelRamGb,
+        kv_vram_gb: kvVramGb,
+        kv_ram_gb: kvRamGb,
+        total_vram_gb: modelVramGb + kvVramGb,
+        total_ram_gb: modelRamGb + kvRamGb,
+        available_vram_gb: hw.gpu_vram_gb,
+        available_ram_gb: hw.total_ram_gb,
+        has_metadata: !!metadata,
+        has_gpu: hw.has_dedicated_gpu && nGpuLayers > 0,
+        offload_ratio: offloadRatio,
+    };
 }
 
 function capContextToModel(
@@ -123,10 +228,10 @@ export function autoConfigureFromHardware(
     if (mode === "gpu_only") {
         if (!hw.has_dedicated_gpu || hw.gpu_vram_gb < 2) {
             notes.push("⚠ Pas de GPU dédié — bascule sur mode équilibré");
-            return autoConfigureFromHardware(hw, "balanced");
+            return autoConfigureFromHardware(hw, "balanced", metadata);
         }
 
-        const n_gpu_layers = 999; // toutes les couches en GPU
+        let n_gpu_layers = 999; // toutes les couches en GPU si le modèle tient réellement
 
         // Contexte conservateur pour que tout tienne en VRAM
         let context_window: number;
@@ -155,7 +260,12 @@ export function autoConfigureFromHardware(
             notes.push("Cache KV : fp16 (VRAM suffisante)");
         }
 
-        notes.push(`GPU : ${hw.gpu_name} (${hw.gpu_vram_gb.toFixed(1)} Go) → toutes les couches`);
+        n_gpu_layers = estimateGpuLayerFit(hw, metadata, n_gpu_layers, mode);
+        if (metadata?.block_count && n_gpu_layers >= metadata.block_count) {
+            notes.push(`GPU : ${hw.gpu_name} (${hw.gpu_vram_gb.toFixed(1)} Go) → toutes les couches`);
+        } else {
+            notes.push(`GPU : ${hw.gpu_name} (${hw.gpu_vram_gb.toFixed(1)} Go) → ${n_gpu_layers} couches (taille modèle prise en compte)`);
+        }
         notes.push(`Contexte : ${context_window.toLocaleString()} tokens (tout en VRAM)`);
         notes.push(`CPU : ${threads} threads`);
 
@@ -211,6 +321,12 @@ export function autoConfigureFromHardware(
         } else {
             n_gpu_layers = 40;
             notes.push(`GPU : ${hw.gpu_name} (${hw.gpu_vram_gb.toFixed(1)} Go) → 40 couches (reste en RAM)`);
+        }
+
+        const requestedGpuLayers = n_gpu_layers;
+        n_gpu_layers = estimateGpuLayerFit(hw, metadata, n_gpu_layers, mode);
+        if (n_gpu_layers < requestedGpuLayers) {
+            notes.push(`GPU : plafond réduit à ${n_gpu_layers} couches selon la taille réelle du modèle`);
         }
 
         notes.push(`RAM : ${hw.total_ram_gb.toFixed(1)} Go — Contexte : ${context_window.toLocaleString()} tokens`);
@@ -272,6 +388,18 @@ export function autoConfigureFromHardware(
     } else {
         n_gpu_layers = 999;
         notes.push(`GPU : ${hw.gpu_name} (${hw.gpu_vram_gb.toFixed(1)} Go) → toutes les couches en GPU`);
+    }
+
+    const requestedGpuLayers = n_gpu_layers;
+    n_gpu_layers = estimateGpuLayerFit(hw, metadata, n_gpu_layers, mode);
+    if (requestedGpuLayers >= 999) {
+        if (metadata?.block_count && n_gpu_layers >= metadata.block_count) {
+            notes.push("GPU : le modèle tient entièrement en VRAM selon sa taille GGUF");
+        } else {
+            notes.push(`GPU : le modèle ne tient pas entièrement en VRAM, plafond ramené à ${n_gpu_layers} couches`);
+        }
+    } else if (n_gpu_layers < requestedGpuLayers) {
+        notes.push(`GPU : plafond réduit à ${n_gpu_layers} couches selon la taille réelle du modèle`);
     }
 
     notes.push(`CPU : ${hw.cpu_threads} threads logiques → ${threads} threads alloués à llama`);

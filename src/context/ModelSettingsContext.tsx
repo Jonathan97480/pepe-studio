@@ -33,10 +33,13 @@ export type ModelSettings = {
     modelPath: string;
     temperature: number;
     contextWindow: number;
+    evalBatchSize: number;
+    flashAttention: boolean;
     systemPrompt: string;
     turboQuant: TurboQuantType;
     nGpuLayers: number;
     threads: number;
+    reasoningBudget: number;
     sampling: SamplingSettings;
     thinkingEnabled: boolean;
 };
@@ -45,10 +48,13 @@ export type ModelSettingsContextValue = ModelSettings & {
     setModelPath: (value: string) => void;
     setTemperature: (value: number) => void;
     setContextWindow: (value: number) => void;
+    setEvalBatchSize: (value: number) => void;
+    setFlashAttention: (value: boolean) => void;
     setSystemPrompt: (value: string) => void;
     setTurboQuant: (value: TurboQuantType) => void;
     setNGpuLayers: (value: number) => void;
     setThreads: (value: number) => void;
+    setReasoningBudget: (value: number) => void;
     setSampling: (value: SamplingSettings | ((prev: SamplingSettings) => SamplingSettings)) => void;
     setThinkingEnabled: (value: boolean) => void;
     // État de chargement (partagé entre ChatWindow et ModelsPanel)
@@ -86,10 +92,13 @@ const defaultSettings: ModelSettings = {
     modelPath: "./models/gemma-4-E4B-it-Q4_K_M.gguf",
     temperature: 0.8,
     contextWindow: 4096,
+    evalBatchSize: 512,
+    flashAttention: false,
     systemPrompt: "Tu es un assistant utile et précis.",
     turboQuant: "q4_1",
     nGpuLayers: 0,
     threads: -1,
+    reasoningBudget: 64,
     sampling: defaultSampling,
     thinkingEnabled: true,
 };
@@ -100,10 +109,13 @@ export function ModelSettingsProvider({ children }: { children: ReactNode }) {
     const [modelPath, setModelPath] = useState(defaultSettings.modelPath);
     const [temperature, setTemperature] = useState(defaultSettings.temperature);
     const [contextWindow, setContextWindow] = useState(defaultSettings.contextWindow);
+    const [evalBatchSize, setEvalBatchSize] = useState(defaultSettings.evalBatchSize);
+    const [flashAttention, setFlashAttention] = useState(defaultSettings.flashAttention);
     const [systemPrompt, setSystemPrompt] = useState(defaultSettings.systemPrompt);
     const [turboQuant, setTurboQuant] = useState<TurboQuantType>(defaultSettings.turboQuant);
     const [nGpuLayers, setNGpuLayers] = useState(defaultSettings.nGpuLayers);
     const [threads, setThreads] = useState(defaultSettings.threads);
+    const [reasoningBudget, setReasoningBudget] = useState(defaultSettings.reasoningBudget);
     const [sampling, setSampling] = useState<SamplingSettings>(defaultSettings.sampling);
     const [thinkingEnabled, setThinkingEnabled] = useState(defaultSettings.thinkingEnabled);
     const [isModelLoaded, setIsModelLoaded] = useState(false);
@@ -114,19 +126,25 @@ export function ModelSettingsProvider({ children }: { children: ReactNode }) {
             modelPath,
             temperature,
             contextWindow,
+            evalBatchSize,
+            flashAttention,
             systemPrompt,
             turboQuant,
             nGpuLayers,
             threads,
+            reasoningBudget,
             sampling,
             thinkingEnabled,
             setModelPath,
             setTemperature,
             setContextWindow,
+            setEvalBatchSize,
+            setFlashAttention,
             setSystemPrompt,
             setTurboQuant,
             setNGpuLayers,
             setThreads,
+            setReasoningBudget,
             setSampling,
             setThinkingEnabled,
             isModelLoaded,
@@ -134,7 +152,22 @@ export function ModelSettingsProvider({ children }: { children: ReactNode }) {
             loadedModelPath,
             setLoadedModelPath,
         }),
-        [modelPath, temperature, contextWindow, systemPrompt, turboQuant, nGpuLayers, threads, sampling, thinkingEnabled, isModelLoaded, loadedModelPath]
+        [
+            modelPath,
+            temperature,
+            contextWindow,
+            evalBatchSize,
+            flashAttention,
+            systemPrompt,
+            turboQuant,
+            nGpuLayers,
+            threads,
+            reasoningBudget,
+            sampling,
+            thinkingEnabled,
+            isModelLoaded,
+            loadedModelPath,
+        ],
     );
 
     return <ModelSettingsContext.Provider value={value}>{children}</ModelSettingsContext.Provider>;

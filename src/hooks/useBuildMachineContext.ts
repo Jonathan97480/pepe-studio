@@ -11,13 +11,8 @@ interface UseBuildMachineContextOptions {
     modelPath: string;
 }
 
-function shouldUseCompactSystemPrompt(modelPath: string): boolean {
-    const name = modelPath.split(/[/\\]/).pop()?.toLowerCase() ?? "";
-    return (
-        name.includes("gemma-4") ||
-        name.includes("gemma4") ||
-        name.includes("mistral-nemo")
-    );
+function shouldUseCompactSystemPrompt(_modelPath: string): boolean {
+    return true;
 }
 
 export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatModeRef, modelPath }: UseBuildMachineContextOptions) {

@@ -57,15 +57,23 @@ export default function ChatWindow({
         modelPath,
         temperature,
         contextWindow,
+        evalBatchSize,
+        flashAttention,
         systemPrompt,
         turboQuant,
         sampling,
+        nGpuLayers,
+        threads,
+        reasoningBudget,
         thinkingEnabled,
         setModelPath,
         setTemperature,
         setContextWindow,
+        setEvalBatchSize,
+        setFlashAttention,
         setSystemPrompt,
         setTurboQuant,
+        setReasoningBudget,
         setThinkingEnabled,
         isModelLoaded,
         setIsModelLoaded,
@@ -87,9 +95,7 @@ export default function ChatWindow({
     const [isResumingConv, setIsResumingConv] = useState(false);
     const [toolRunning, setToolRunning] = useState(false);
     const [conversationId, setConversationId] = useState<number | null>(null);
-    const [deepThinkingEnabled, setDeepThinkingEnabled] = useState(
-        () => typeof window === "undefined" || localStorage.getItem("customapp_deep_thinking") !== "false",
-    );
+    const [deepThinkingEnabled, setDeepThinkingEnabled] = useState(true);
     const [chatMode, setChatMode] = useState<ChatMode>("plan");
     const chatModeRef = useRef<ChatMode>("plan");
     const [pendingQuestion, setPendingQuestion] = useState<{
@@ -134,10 +140,12 @@ export default function ChatWindow({
     >(null);
 
     const bottomRef = useRef<HTMLDivElement>(null);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const recognitionRef = useRef<{ stop: () => void } | null>(null);
     const prevStreamingRef = useRef(false);
+    const autoScrollEnabledRef = useRef(true);
 
     // ── Hooks extraits ────────────────────────────────────────────────────────
     const {
@@ -185,8 +193,24 @@ export default function ChatWindow({
         chatModeRef.current = chatMode;
     }, [chatMode]);
 
-    // Scroll automatique vers le bas
     useEffect(() => {
+        const stored = localStorage.getItem("customapp_deep_thinking");
+        if (stored != null) {
+            setDeepThinkingEnabled(stored !== "false");
+        }
+    }, []);
+
+    const updateAutoScrollState = () => {
+        const container = scrollContainerRef.current;
+        if (!container) return;
+
+        const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+        autoScrollEnabledRef.current = distanceFromBottom <= 48;
+    };
+
+    // Scroll automatique vers le bas tant que l'utilisateur reste près de la fin.
+    useEffect(() => {
+        if (!autoScrollEnabledRef.current) return;
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
 
@@ -195,6 +219,7 @@ export default function ChatWindow({
         resetMessages();
         setConversationId(null);
         lastToolSignatureRef.current = null;
+        autoScrollEnabledRef.current = true;
         setTodoItems([]);
         setProjectStructure("");
         setPlanContent("");
@@ -333,7 +358,10 @@ export default function ChatWindow({
             modelPath,
             temperature,
             contextWindow,
+            evalBatchSize,
+            flashAttention,
             sampling,
+            reasoningBudget,
             thinkingEnabled,
             systemPrompt: machineContext ? machineContext + (systemPrompt ? "\n\n" + systemPrompt : "") : systemPrompt,
             turboQuant,
@@ -369,11 +397,14 @@ export default function ChatWindow({
                     modelPath: runtimeConfig.path,
                     temperature: runtimeConfig.temperature,
                     contextWindow: runtimeConfig.context_window,
+                    evalBatchSize: runtimeConfig.eval_batch_size,
+                    flashAttention: runtimeConfig.flash_attention,
                     systemPrompt: runtimeConfig.system_prompt,
                     turboQuant: runtimeConfig.turbo_quant as TurboQuantType,
                     mmprojPath: runtimeConfig.mmproj_path || undefined,
                     nGpuLayers: runtimeConfig.n_gpu_layers > 0 ? runtimeConfig.n_gpu_layers : undefined,
                     threads: runtimeConfig.threads > 0 ? runtimeConfig.threads : undefined,
+                    reasoningBudget: runtimeConfig.reasoning_budget,
                     sampling: savedSampling,
                     ...((): DetectedTemplate => {
                         if (runtimeConfig.chat_template === "jinja") return { useJinja: true };
@@ -386,13 +417,18 @@ export default function ChatWindow({
                 setModelPath(runtimeConfig.path);
                 setTemperature(runtimeConfig.temperature);
                 setContextWindow(runtimeConfig.context_window);
+                setEvalBatchSize(runtimeConfig.eval_batch_size);
+                setFlashAttention(runtimeConfig.flash_attention);
                 setSystemPrompt(runtimeConfig.system_prompt);
                 setTurboQuant(runtimeConfig.turbo_quant as TurboQuantType);
+                setReasoningBudget(runtimeConfig.reasoning_budget);
                 setThinkingEnabled(thinkingEnabled);
                 effectiveConfig = {
                     modelPath: runtimeConfig.path,
                     temperature: runtimeConfig.temperature,
                     contextWindow: runtimeConfig.context_window,
+                    evalBatchSize: runtimeConfig.eval_batch_size,
+                    flashAttention: runtimeConfig.flash_attention,
                     systemPrompt: machineContext
                         ? machineContext + (runtimeConfig.system_prompt ? "\n\n" + runtimeConfig.system_prompt : "")
                         : runtimeConfig.system_prompt,
@@ -400,6 +436,7 @@ export default function ChatWindow({
                     mmprojPath: runtimeConfig.mmproj_path || undefined,
                     nGpuLayers: runtimeConfig.n_gpu_layers > 0 ? runtimeConfig.n_gpu_layers : undefined,
                     threads: runtimeConfig.threads > 0 ? runtimeConfig.threads : undefined,
+                    reasoningBudget: runtimeConfig.reasoning_budget,
                     sampling: savedSampling,
                     thinkingEnabled,
                 };
@@ -465,6 +502,36 @@ export default function ChatWindow({
         }
     };
 
+    const handleToggleThinking = async () => {
+        const nextThinkingEnabled = !thinkingEnabled;
+        setThinkingEnabled(nextThinkingEnabled);
+
+        if (!isModelLoaded || !loadedModelPath) {
+            return;
+        }
+
+        try {
+            await loadModel({
+                modelPath: loadedModelPath,
+                temperature,
+                contextWindow,
+                evalBatchSize,
+                flashAttention,
+                systemPrompt,
+                turboQuant,
+                nGpuLayers: nGpuLayers > 0 ? nGpuLayers : undefined,
+                threads: threads > 0 ? threads : undefined,
+                reasoningBudget,
+                sampling,
+                thinkingEnabled: nextThinkingEnabled,
+            });
+            setIsModelLoaded(true);
+            setLoadedModelPath(loadedModelPath);
+        } catch (error) {
+            console.error("[ChatWindow] handleToggleThinking reload failed", error);
+        }
+    };
+
     const handleResendEdit = async (index: number, newContent: string) => {
         truncateMessagesFrom(index);
         setEditingIndex(null);
@@ -473,10 +540,13 @@ export default function ChatWindow({
                 modelPath,
                 temperature,
                 contextWindow,
+                evalBatchSize,
+                flashAttention,
                 systemPrompt: machineContext
                     ? machineContext + (systemPrompt ? "\n\n" + systemPrompt : "")
                     : systemPrompt,
                 turboQuant,
+                reasoningBudget,
                 sampling,
                 thinkingEnabled,
             });
@@ -538,7 +608,7 @@ export default function ChatWindow({
                     setTtsEnabled((value) => !value);
                 }}
             />
-            <div className="flex-1 overflow-y-auto p-8">
+            <div ref={scrollContainerRef} onScroll={updateAutoScrollState} className="flex-1 overflow-y-auto p-8">
                 <div className="mx-auto flex max-w-3xl flex-col gap-4">
                     {isLoadingConv ? (
                         <div className="flex flex-col items-center justify-center gap-3 py-24 text-slate-500">
@@ -604,9 +674,7 @@ export default function ChatWindow({
                         }}
                         patchResults={patchResults}
                         onDismissPatchResults={() => setPatchResults(null)}
-                        pendingPlanConfirm={
-                            pendingPlanConfirm ? { description: pendingPlanConfirm.description } : null
-                        }
+                        pendingPlanConfirm={pendingPlanConfirm ? { description: pendingPlanConfirm.description } : null}
                         onConfirmPlanAction={() => {
                             if (!pendingPlanConfirm) return;
                             const { parsed: parsedTool, config } = pendingPlanConfirm;
@@ -653,7 +721,7 @@ export default function ChatWindow({
                 isListening={isListening}
                 onToggleMic={handleMic}
                 thinkingEnabled={thinkingEnabled}
-                onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
+                onToggleThinking={handleToggleThinking}
                 deepThinkingEnabled={deepThinkingEnabled}
                 onToggleDeepThinking={toggleDeepThinking}
                 loading={loading}

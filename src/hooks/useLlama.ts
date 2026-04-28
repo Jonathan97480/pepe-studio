@@ -125,6 +125,23 @@ export function useLlama() {
             .trim();
     }, []);
 
+    const isCorruptedThinkingChunk = useCallback((text: string): boolean => {
+        const trimmed = text.trim();
+        if (!trimmed) return false;
+
+        const visibleChars = Array.from(trimmed).filter((ch) => !/\s/.test(ch));
+        if (visibleChars.length < 12) return false;
+
+        const questionLikeCount = visibleChars.filter((ch) =>
+            ch === "?" || ch === "�" || ch === "\uFFFD"
+        ).length;
+        const alphaNumCount = visibleChars.filter((ch) => /[\p{L}\p{N}]/u.test(ch)).length;
+        const punctuationOnly = alphaNumCount === 0;
+        const questionRatio = questionLikeCount / visibleChars.length;
+
+        return punctuationOnly || (questionLikeCount >= 16 && questionRatio >= 0.55);
+    }, []);
+
     /** Détecte si le texte assistant visible contient une vraie séquence répétée en boucle */
     const detectRepetitionLoop = useCallback((buffer: string): boolean => {
         const normalized = normalizeVisibleAssistantText(buffer);
@@ -229,8 +246,13 @@ export function useLlama() {
                     setMessages((current) => {
                         const next = [...current];
                         const last = next[next.length - 1] as LlamaMessage | undefined;
-                        const chunkText = payload.chunk;
+                        const rawChunkText = payload.chunk;
                         const isThinking = payload.is_thinking === true;
+                        if (isThinking && isCorruptedThinkingChunk(rawChunkText)) {
+                            debugLog(`thinking chunk ignored as corrupted: ${rawChunkText.slice(0, 80)}`);
+                            return next;
+                        }
+                        const chunkText = rawChunkText;
 
                         // Fallback : détecter les marqueurs anciens dans content (ex: modèles sans reasoning_content)
                         const markerRegex = /\[end thinking\]/i;
@@ -461,7 +483,7 @@ export function useLlama() {
             unlistenError?.();
             unlistenUsage?.();
         };
-    }, [debugLog, detectRepetitionLoop]);
+    }, [debugLog, detectRepetitionLoop, isCorruptedThinkingChunk, normalizeVisibleAssistantText]);
 
     const loadModel = useCallback(async (config: LlamaLaunchConfig) => {
         setError(null);

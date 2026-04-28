@@ -1,6 +1,7 @@
 //! Wrapper Rust pour lancer llama-server et communiquer via HTTP/SSE avec le frontend Tauri
 
 use std::env;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -27,6 +28,14 @@ impl Default for LlamaState {
 pub struct ChatMessage {
     pub role: String,
     pub content: serde_json::Value,  // String ou tableau [{type,text},{type,image_url}] pour le multimodal
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct LlamaLogs {
+    pub stdout_path: String,
+    pub stderr_path: String,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 const SERVER_PORT: u16 = 8765;
@@ -156,6 +165,49 @@ fn resolve_llama_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
     ))
 }
 
+fn llama_log_paths(app: &AppHandle) -> (PathBuf, PathBuf) {
+    let data_dir = app
+        .path_resolver()
+        .app_data_dir()
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let _ = fs::create_dir_all(&data_dir);
+    (
+        data_dir.join("llama-server.stdout.log"),
+        data_dir.join("llama-server.stderr.log"),
+    )
+}
+
+fn read_log_tail(path: &Path, max_lines: usize) -> String {
+    let Ok(content) = fs::read_to_string(path) else {
+        return String::new();
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
+}
+
+fn build_startup_error(app: &AppHandle, headline: &str) -> String {
+    let (stdout_path, stderr_path) = llama_log_paths(app);
+    let stderr_tail = read_log_tail(&stderr_path, 80);
+    let stdout_tail = read_log_tail(&stdout_path, 40);
+
+    let mut message = String::from(headline);
+    if !stderr_tail.is_empty() {
+        message.push_str("\n\n[llama-server stderr]\n");
+        message.push_str(&stderr_tail);
+    }
+    if !stdout_tail.is_empty() {
+        message.push_str("\n\n[llama-server stdout]\n");
+        message.push_str(&stdout_tail);
+    }
+    message.push_str(&format!(
+        "\n\nLogs complets:\nstdout: {}\nstderr: {}",
+        stdout_path.display(),
+        stderr_path.display()
+    ));
+    message
+}
+
 #[command]
 pub async fn start_llama(
     model_path: String,
@@ -201,6 +253,13 @@ pub async fn start_llama(
     let server_binary = resolve_llama_server_binary(&app)?;
     // Répertoire du binaire pour que Windows trouve les DLLs (ggml-base.dll, llama.dll, etc.)
     let server_dir = server_binary.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+    let (stdout_log_path, stderr_log_path) = llama_log_paths(&app);
+    let _ = fs::write(&stdout_log_path, "");
+    let _ = fs::write(&stderr_log_path, "");
+    let stdout_log = File::create(&stdout_log_path)
+        .map_err(|e| format!("Impossible de créer le log stdout llama-server: {}", e))?;
+    let stderr_log = File::create(&stderr_log_path)
+        .map_err(|e| format!("Impossible de créer le log stderr llama-server: {}", e))?;
 
     let mut command = Command::new(&server_binary);
     command
@@ -209,8 +268,8 @@ pub async fn start_llama(
         .arg("--port").arg(SERVER_PORT.to_string())
         .args(&params)
         .current_dir(&server_dir)  // Garantit que les DLLs adjacentes (ggml-base.dll, etc.) sont trouvées
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(stderr_log))
         .stdin(Stdio::null());
 
     // Masquer la fenêtre console sur Windows
@@ -231,12 +290,15 @@ pub async fn start_llama(
     // Attendre que le serveur soit prêt (health check)
     let health_url = format!("http://127.0.0.1:{}/health", SERVER_PORT);
     let client = reqwest::Client::new();
-    let timeout = Instant::now() + Duration::from_secs(120);
+    let timeout = Instant::now() + Duration::from_secs(240);
 
     println!("[llama_sidecar] en attente du serveur sur {}", health_url);
     loop {
         if Instant::now() > timeout {
-            return Err("Timeout: le serveur llama n'a pas démarré dans les délais (120s)".into());
+            return Err(build_startup_error(
+                &app,
+                "Timeout: le serveur llama n'a pas démarré dans les délais (240s)",
+            ));
         }
 
         // Vérifier que le processus est encore vivant (non-bloquant)
@@ -246,9 +308,12 @@ pub async fn start_llama(
                 match child.try_wait() {
                     Ok(Some(status)) => {
                         drop(child_lock);
-                        return Err(format!(
-                            "llama-server s'est arrêté prématurément (code: {:?}). Modèle incompatible ou mémoire insuffisante.",
-                            status.code()
+                        return Err(build_startup_error(
+                            &app,
+                            &format!(
+                                "llama-server s'est arrêté prématurément (code: {:?}). Modèle incompatible ou mémoire insuffisante.",
+                                status.code()
+                            ),
                         ));
                     }
                     _ => {}
@@ -269,6 +334,17 @@ pub async fn start_llama(
 
     *state.port.lock().unwrap() = Some(SERVER_PORT);
     Ok(format!("Serveur llama démarré sur le port {}", SERVER_PORT))
+}
+
+#[command]
+pub fn get_llama_logs(app: AppHandle) -> Result<LlamaLogs, String> {
+    let (stdout_path, stderr_path) = llama_log_paths(&app);
+    Ok(LlamaLogs {
+        stdout_path: stdout_path.display().to_string(),
+        stderr_path: stderr_path.display().to_string(),
+        stdout: read_log_tail(&stdout_path, 120),
+        stderr: read_log_tail(&stderr_path, 200),
+    })
 }
 
 

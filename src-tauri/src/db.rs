@@ -62,6 +62,9 @@ pub struct ModelConfig {
     pub name: String,
     pub temperature: f64,
     pub context_window: i64,
+    pub eval_batch_size: i64,
+    #[serde(default)]
+    pub flash_attention: bool,
     pub system_prompt: String,
     pub turbo_quant: String,
     pub mmproj_path: String,
@@ -74,6 +77,9 @@ pub struct ModelConfig {
     /// Chat template override : "" = auto, "jinja" = --jinja, "gemma", "llama3", etc.
     #[serde(default)]
     pub chat_template: String,
+    /// Budget de reasoning llama.cpp : -1 = illimité, 0 = stop immédiat, N > 0 = budget
+    #[serde(default)]
+    pub reasoning_budget: i64,
 }
 
 /// Initialise la base SQLite dans le dossier de données de l'app
@@ -110,6 +116,14 @@ pub fn init_db(app: &AppHandle) -> Connection {
     .ok();
     conn.execute_batch("ALTER TABLE model_configs ADD COLUMN threads INTEGER NOT NULL DEFAULT -1;")
         .ok();
+    conn.execute_batch(
+        "ALTER TABLE model_configs ADD COLUMN eval_batch_size INTEGER NOT NULL DEFAULT 512;",
+    )
+    .ok();
+    conn.execute_batch(
+        "ALTER TABLE model_configs ADD COLUMN flash_attention INTEGER NOT NULL DEFAULT 0;",
+    )
+    .ok();
     // Migration : ajouter sampling_json pour les paramètres de sampling par modèle
     conn.execute_batch(
         "ALTER TABLE model_configs ADD COLUMN sampling_json TEXT NOT NULL DEFAULT '';",
@@ -118,6 +132,10 @@ pub fn init_db(app: &AppHandle) -> Connection {
     // Migration : ajouter chat_template pour l'override du chat template llama.cpp
     conn.execute_batch(
         "ALTER TABLE model_configs ADD COLUMN chat_template TEXT NOT NULL DEFAULT '';",
+    )
+    .ok();
+    conn.execute_batch(
+        "ALTER TABLE model_configs ADD COLUMN reasoning_budget INTEGER NOT NULL DEFAULT 64;",
     )
     .ok();
 
@@ -358,7 +376,7 @@ pub fn get_all_model_configs(state: State<'_, DbState>) -> Result<Vec<ModelConfi
     let conn = state.0.lock().unwrap();
     let mut stmt = conn
         .prepare(
-            "SELECT path, name, temperature, context_window, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template
+            "SELECT path, name, temperature, context_window, eval_batch_size, flash_attention, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template, reasoning_budget
              FROM model_configs ORDER BY is_default DESC, name ASC",
         )
         .map_err(|e| e.to_string())?;
@@ -369,14 +387,17 @@ pub fn get_all_model_configs(state: State<'_, DbState>) -> Result<Vec<ModelConfi
                 name: row.get(1)?,
                 temperature: row.get(2)?,
                 context_window: row.get(3)?,
-                system_prompt: row.get(4)?,
-                turbo_quant: row.get(5)?,
-                mmproj_path: row.get(6)?,
-                n_gpu_layers: row.get(7)?,
-                threads: row.get(8)?,
-                is_default: row.get::<_, i64>(9)? != 0,
-                sampling_json: row.get::<_, String>(10).unwrap_or_default(),
-                chat_template: row.get::<_, String>(11).unwrap_or_default(),
+                eval_batch_size: row.get::<_, i64>(4).unwrap_or(512),
+                flash_attention: row.get::<_, i64>(5).unwrap_or(0) != 0,
+                system_prompt: row.get(6)?,
+                turbo_quant: row.get(7)?,
+                mmproj_path: row.get(8)?,
+                n_gpu_layers: row.get(9)?,
+                threads: row.get(10)?,
+                is_default: row.get::<_, i64>(11)? != 0,
+                sampling_json: row.get::<_, String>(12).unwrap_or_default(),
+                chat_template: row.get::<_, String>(13).unwrap_or_default(),
+                reasoning_budget: row.get::<_, i64>(14).unwrap_or(64),
             })
         })
         .map_err(|e| e.to_string())?
@@ -391,13 +412,15 @@ pub fn save_model_config(config: ModelConfig, state: State<'_, DbState>) -> Resu
     let conn = state.0.lock().unwrap();
     conn.execute(
         "INSERT OR REPLACE INTO model_configs
-         (path, name, temperature, context_window, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         (path, name, temperature, context_window, eval_batch_size, flash_attention, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template, reasoning_budget)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             config.path,
             config.name,
             config.temperature,
             config.context_window,
+            config.eval_batch_size,
+            config.flash_attention as i64,
             config.system_prompt,
             config.turbo_quant,
             config.mmproj_path,
@@ -405,7 +428,8 @@ pub fn save_model_config(config: ModelConfig, state: State<'_, DbState>) -> Resu
             config.threads,
             config.is_default as i64,
             config.sampling_json,
-            config.chat_template
+            config.chat_template,
+            config.reasoning_budget
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -431,7 +455,7 @@ pub fn set_default_model(path: String, state: State<'_, DbState>) -> Result<(), 
 pub fn get_default_model(state: State<'_, DbState>) -> Result<Option<ModelConfig>, String> {
     let conn = state.0.lock().unwrap();
     match conn.query_row(
-        "SELECT path, name, temperature, context_window, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template
+        "SELECT path, name, temperature, context_window, eval_batch_size, flash_attention, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template, reasoning_budget
          FROM model_configs WHERE is_default = 1 LIMIT 1",
         [],
         |row| {
@@ -440,14 +464,17 @@ pub fn get_default_model(state: State<'_, DbState>) -> Result<Option<ModelConfig
                 name: row.get(1)?,
                 temperature: row.get(2)?,
                 context_window: row.get(3)?,
-                system_prompt: row.get(4)?,
-                turbo_quant: row.get(5)?,
-                mmproj_path: row.get(6)?,
-                n_gpu_layers: row.get(7)?,
-                threads: row.get(8)?,
+                eval_batch_size: row.get::<_, i64>(4).unwrap_or(512),
+                flash_attention: row.get::<_, i64>(5).unwrap_or(0) != 0,
+                system_prompt: row.get(6)?,
+                turbo_quant: row.get(7)?,
+                mmproj_path: row.get(8)?,
+                n_gpu_layers: row.get(9)?,
+                threads: row.get(10)?,
                 is_default: true,
-                sampling_json: row.get::<_, String>(10).unwrap_or_default(),
-                chat_template: row.get::<_, String>(11).unwrap_or_default(),
+                sampling_json: row.get::<_, String>(12).unwrap_or_default(),
+                chat_template: row.get::<_, String>(13).unwrap_or_default(),
+                reasoning_budget: row.get::<_, i64>(14).unwrap_or(64),
             })
         },
     ) {

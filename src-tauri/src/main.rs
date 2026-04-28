@@ -8,6 +8,7 @@ mod dev_server;
 mod http_client;
 mod hw_info;
 mod llama_sidecar;
+mod logger;
 mod mcp;
 mod model_metadata;
 mod scraper;
@@ -34,7 +35,10 @@ use hw_info::{
     list_folder_pdfs, patch_file, read_file_content, read_image, read_image_batch, read_pdf_batch,
     read_pdf_bytes, run_shell_command, save_image, write_file,
 };
-use llama_sidecar::{cleanup_llama, send_llama_prompt, start_llama, stop_llama, LlamaState};
+use llama_sidecar::{
+    cleanup_llama, get_llama_logs, send_llama_prompt, start_llama, stop_llama, LlamaState,
+};
+use logger::{app_log, get_current_log_path, list_log_sessions, read_log_session, AppLogger};
 use mcp::{
     call_mcp_tool, cleanup_all_mcp_servers, create_mcp_server, list_mcp_servers, start_mcp_server,
     stop_mcp_server, McpState,
@@ -63,6 +67,7 @@ fn main() {
             app.manage(DevServerState::default());
             app.manage(TerminalManagerState::default());
             app.manage(InteractiveState::default());
+            app.manage(AppLogger::new(&app.handle()));
             Ok(())
         })
         .manage(LlamaState::default())
@@ -76,6 +81,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             start_llama,
             stop_llama,
+            get_llama_logs,
             send_llama_prompt,
             list_model_files,
             list_mmproj_files,
@@ -144,6 +150,10 @@ fn main() {
             stop_dev_server,
             get_browser_errors,
             get_dev_server_info,
+            app_log,
+            get_current_log_path,
+            list_log_sessions,
+            read_log_session,
             create_terminal,
             terminal_exec,
             terminal_start_interactive,

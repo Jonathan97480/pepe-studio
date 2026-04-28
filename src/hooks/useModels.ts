@@ -9,6 +9,8 @@ export type ModelConfig = {
     name: string;
     temperature: number;
     context_window: number;
+    eval_batch_size: number;
+    flash_attention: boolean;
     system_prompt: string;
     turbo_quant: string;
     mmproj_path: string;
@@ -19,6 +21,8 @@ export type ModelConfig = {
     sampling_json: string;
     /** Chat template override ("" = auto-détection, "jinja" = --jinja, ou nom du template) */
     chat_template: string;
+    /** Budget de reasoning llama.cpp : -1 = illimité, 0 = stop immédiat, N > 0 = budget */
+    reasoning_budget: number;
 };
 
 export const DEFAULT_SAMPLING: SamplingSettings = {
@@ -58,6 +62,8 @@ export function parseSamplingJson(json: string): SamplingSettings {
 const DEFAULT_CONFIG: Omit<ModelConfig, "path" | "name" | "is_default"> = {
     temperature: 0.9,
     context_window: 4096,
+    eval_batch_size: 512,
+    flash_attention: false,
     system_prompt: "Tu es un assistant utile et pr\u00e9cis.",
     turbo_quant: "q8_0",
     mmproj_path: "",
@@ -65,6 +71,7 @@ const DEFAULT_CONFIG: Omit<ModelConfig, "path" | "name" | "is_default"> = {
     threads: -1,
     sampling_json: "",
     chat_template: "",
+    reasoning_budget: 64,
 };
 
 export function useModels() {
@@ -110,15 +117,16 @@ export function useModels() {
             const name = path.split(/[/\\]/).pop() ?? path;
             // Auto-détection : chercher un mmproj dont le nom commence par le même préfixe
             const baseName = name.replace(/\.gguf$/i, "").toLowerCase();
-            const autoMmproj = mmprojFiles.find((mp) => {
-                const mpName = mp.split(/[/\\]/).pop()?.toLowerCase() ?? "";
-                // Heuristique : le mmproj partage le début du nom du modèle avant -Q4 / -it etc.
-                const modelPrefix = baseName.split(/[-_](q[0-9]|it|instruct|chat|mmproj)/i)[0];
-                return mpName.startsWith(modelPrefix);
-            }) ?? "";
+            const autoMmproj =
+                mmprojFiles.find((mp) => {
+                    const mpName = mp.split(/[/\\]/).pop()?.toLowerCase() ?? "";
+                    // Heuristique : le mmproj partage le début du nom du modèle avant -Q4 / -it etc.
+                    const modelPrefix = baseName.split(/[-_](q[0-9]|it|instruct|chat|mmproj)/i)[0];
+                    return mpName.startsWith(modelPrefix);
+                }) ?? "";
             return { path, name, ...DEFAULT_CONFIG, mmproj_path: autoMmproj, is_default: false };
         },
-        [modelConfigs, mmprojFiles]
+        [modelConfigs, mmprojFiles],
     );
 
     const saveConfig = useCallback(
@@ -126,7 +134,7 @@ export function useModels() {
             await invoke("save_model_config", { config });
             await refresh();
         },
-        [refresh]
+        [refresh],
     );
 
     const setDefault = useCallback(
@@ -142,7 +150,7 @@ export function useModels() {
             await invoke("set_default_model", { path });
             await refresh();
         },
-        [modelConfigs, refresh]
+        [modelConfigs, refresh],
     );
 
     const getDefault = useCallback(async (): Promise<ModelConfig | null> => {
@@ -154,7 +162,7 @@ export function useModels() {
             await invoke("delete_model_config", { path });
             await refresh();
         },
-        [refresh]
+        [refresh],
     );
 
     return {
@@ -171,4 +179,4 @@ export function useModels() {
         deleteConfig,
     };
 }
-    const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));

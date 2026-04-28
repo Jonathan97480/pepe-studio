@@ -322,7 +322,7 @@ export function ChatComposer({
                 </div>
 
                 {(error || autoLoadError) && (
-                    <div className="rounded-3xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                    <div className="rounded-3xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200 whitespace-pre-wrap">
                         {error ?? autoLoadError}
                     </div>
                 )}

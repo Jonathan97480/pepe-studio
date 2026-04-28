@@ -31,13 +31,16 @@ export type LlamaLaunchConfig = {
     temperature?: number;
     maxTokens?: number;
     contextWindow?: number;
+    evalBatchSize?: number; // -b : taille du lot d'evaluation (tokens d'entree traites a la fois)
+    flashAttention?: boolean; // --flash-attn on : active Flash Attention
     systemPrompt?: string;
     turboQuant?: TurboQuantType;
     mmprojPath?: string;
-    nGpuLayers?: number;  // -ngl : couches GPU (0 = CPU uniquement)
-    threads?: number;     // -t : threads CPU (-1 = auto)
+    nGpuLayers?: number; // -ngl : couches GPU (0 = CPU uniquement)
+    threads?: number; // -t : threads CPU (-1 = auto)
     chatTemplate?: string; // --chat-template : forcer le template si absent/cassé dans le GGUF
-    useJinja?: boolean;      // --jinja : utiliser le template Jinja2 embarqué dans le GGUF (Gemma 4 uncensored)
+    useJinja?: boolean; // --jinja : utiliser le template Jinja2 embarqué dans le GGUF (Gemma 4 uncensored)
+    reasoningBudget?: number; // --reasoning-budget : -1 = illimité, 0 = stop immédiat, N > 0 = budget
     sampling?: SamplingParams;
     thinkingEnabled?: boolean;
 };
@@ -49,7 +52,11 @@ export type LlamaLaunchConfig = {
 const UNSUPPORTED_KV_QUANT_PATTERNS = ["gemma-4", "gemma4"];
 
 export function modelSupportsKvQuant(modelPath: string): boolean {
-    const name = modelPath.split(/[\/\\]/).pop()?.toLowerCase() ?? "";
+    const name =
+        modelPath
+            .split(/[\/\\]/)
+            .pop()
+            ?.toLowerCase() ?? "";
     return !UNSUPPORTED_KV_QUANT_PATTERNS.some((p) => name.includes(p));
 }
 
@@ -71,16 +78,53 @@ export function buildLlamaArgs(config: Partial<LlamaLaunchConfig>): string[] {
     // Note: temperature est passée par requête API, pas au démarrage du serveur.
     // -t ici serait le nombre de threads, pas la température.
 
-    if (config.contextWindow !== undefined) {
-        args.push("-c", config.contextWindow.toString());
+    const mmprojPath = config.mmprojPath?.trim();
+    const hasMmproj = !!mmprojPath;
+    const modelName =
+        config.modelPath
+            ?.split(/[\/\\]/)
+            .pop()
+            ?.toLowerCase() ?? "";
+    const isGemma4 = modelName.includes("gemma-4") || modelName.includes("gemma4");
+    const useSafeGemma4MultimodalProfile = hasMmproj && isGemma4;
+    const effectiveContextWindow =
+        config.contextWindow !== undefined
+            ? hasMmproj
+                ? Math.min(config.contextWindow, 32768)
+                : config.contextWindow
+            : undefined;
+    const effectiveEvalBatchSize =
+        config.evalBatchSize !== undefined && Number.isFinite(config.evalBatchSize) && config.evalBatchSize > 0
+            ? useSafeGemma4MultimodalProfile
+                ? Math.min(Math.trunc(config.evalBatchSize), 128)
+                : Math.trunc(config.evalBatchSize)
+            : undefined;
+
+    if (effectiveContextWindow !== undefined) {
+        args.push("-c", effectiveContextWindow.toString());
+    }
+
+    if (effectiveEvalBatchSize !== undefined) {
+        args.push("-b", effectiveEvalBatchSize.toString());
+    }
+
+    if (useSafeGemma4MultimodalProfile) {
+        // Evite un crash scheduler ggml observé sur certains builds Gemma4 + mmproj + CUDA.
+        args.push("--flash-attn", "off");
+    } else if (config.flashAttention === true) {
+        args.push("--flash-attn", "on");
+    } else if (config.flashAttention === false) {
+        args.push("--flash-attn", "off");
     }
 
     if (config.turboQuant && config.modelPath && modelSupportsKvQuant(config.modelPath)) {
         args.push(...buildTurboQuantArgs(config.turboQuant));
     }
 
-    if (config.mmprojPath && config.mmprojPath.trim()) {
-        args.push("--mmproj", config.mmprojPath.trim());
+    if (hasMmproj) {
+        // Mitige un crash connu ggml scheduler sur certains builds CUDA + mmproj quand -fit est actif.
+        args.push("-fit", "off", "--parallel", "1");
+        args.push("--mmproj", mmprojPath);
     }
 
     if (config.nGpuLayers !== undefined && config.nGpuLayers > 0) {
@@ -89,6 +133,10 @@ export function buildLlamaArgs(config: Partial<LlamaLaunchConfig>): string[] {
 
     if (config.threads !== undefined && config.threads > 0) {
         args.push("-t", config.threads.toString());
+    }
+
+    if (config.reasoningBudget !== undefined && Number.isFinite(config.reasoningBudget)) {
+        args.push("--reasoning-budget", Math.trunc(config.reasoningBudget).toString());
     }
 
     if (config.useJinja) {
@@ -107,8 +155,15 @@ export function buildLlamaArgs(config: Partial<LlamaLaunchConfig>): string[] {
  */
 export type DetectedTemplate = { chatTemplate?: string; useJinja?: boolean };
 
-export function detectChatTemplate(modelPath: string, metadata?: Pick<ModelMetadata, "has_chat_template">): DetectedTemplate {
-    const name = modelPath.split(/[\/\\]/).pop()?.toLowerCase() ?? "";
+export function detectChatTemplate(
+    modelPath: string,
+    metadata?: Pick<ModelMetadata, "has_chat_template">,
+): DetectedTemplate {
+    const name =
+        modelPath
+            .split(/[\/\\]/)
+            .pop()
+            ?.toLowerCase() ?? "";
 
     if (metadata?.has_chat_template) return {};
 
