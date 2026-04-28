@@ -13,7 +13,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use futures_util::stream;
+use futures_util::{stream, TryStreamExt};
 use serde_json::{json, Value};
 use std::sync::Mutex;
 use tauri::Manager;
@@ -203,21 +203,18 @@ async fn chat_completions_handler(
         }
     }
 
-    // Stream + tools : on exécute la boucle en non-stream puis on re-wrap en SSE
-    // OpenAI-compatible (delta events + [DONE]).
-    match chat_with_tools_loop(&state, body).await {
-        Ok(final_json) => stream_response_from_completion(final_json),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({
-                "error": {
-                    "message": e,
-                    "type": "tool_loop_error",
-                    "code": "bad_gateway"
-                }
-            })),
-        )
-            .into_response(),
+    // Mode stream:
+    // - par défaut: passthrough direct pour avoir la réflexion en continu (temps réel)
+    // - si le client envoie explicitement des tools/tool_choice: boucle outils + SSE synthétique
+    let explicit_tools_requested = body.get("tools").is_some() || body.get("tool_choice").is_some();
+
+    if !explicit_tools_requested {
+        return proxy_stream_passthrough(&state, body).await;
+    }
+
+    match chat_with_tools_loop(&state, body.clone()).await {
+        Ok(final_json) => completion_to_sse_response(final_json),
+        Err(_) => proxy_stream_passthrough(&state, body).await,
     }
 }
 
@@ -328,6 +325,20 @@ fn ensure_tools_are_available(req_body: &mut Value) {
                 "parameters": {
                     "type": "object",
                     "properties": {},
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_disk_usage",
+                "description": "Récupère la taille totale, utilisée et libre d'un disque local (ex: D:)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "drive": { "type": "string", "description": "Lettre du disque, ex: D" }
+                    },
                     "additionalProperties": false
                 }
             }
@@ -1025,76 +1036,76 @@ fn append_message(req_body: &mut Value, msg: Value) {
     }
 }
 
-fn stream_response_from_completion(final_json: Value) -> Response {
+fn completion_to_sse_response(final_json: Value) -> Response {
     let id = final_json
         .get("id")
         .and_then(|v| v.as_str())
-        .unwrap_or("chatcmpl-pepe-stream")
-        .to_string();
+        .unwrap_or("chatcmpl-pepe-stream");
     let model = final_json
         .get("model")
         .and_then(|v| v.as_str())
-        .unwrap_or("pepe-studio-model")
-        .to_string();
+        .unwrap_or("pepe-studio-model");
     let created = final_json
         .get("created")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    let content = final_json
+    let message = final_json
         .get("choices")
         .and_then(|v| v.get(0))
         .and_then(|v| v.get("message"))
-        .and_then(|v| v.get("content"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let content = message
+        .get("content")
         .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+        .unwrap_or("");
+    let reasoning = message
+        .get("reasoning_content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
-    let mut events: Vec<String> = Vec::new();
-
-    let role_event = json!({
+    let event_role = json!({
         "id": id,
         "object": "chat.completion.chunk",
         "created": created,
         "model": model,
-        "choices": [{
-            "index": 0,
-            "delta": { "role": "assistant" },
-            "finish_reason": Value::Null
-        }]
+        "choices": [{ "index": 0, "delta": { "role": "assistant" }, "finish_reason": Value::Null }]
     });
-    events.push(format!("data: {}\n\n", role_event));
+    let mut lines = vec![format!("data: {}\n\n", event_role)];
 
-    for piece in split_for_sse(&content, 180) {
-        let chunk_event = json!({
+    for piece in split_text_chunks(reasoning, 180) {
+        let event_reasoning = json!({
             "id": id,
             "object": "chat.completion.chunk",
             "created": created,
             "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": { "content": piece },
-                "finish_reason": Value::Null
-            }]
+            "choices": [{ "index": 0, "delta": { "reasoning_content": piece }, "finish_reason": Value::Null }]
         });
-        events.push(format!("data: {}\n\n", chunk_event));
+        lines.push(format!("data: {}\n\n", event_reasoning));
     }
 
-    let done_event = json!({
+    for piece in split_text_chunks(content, 180) {
+        let event_content = json!({
+            "id": id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{ "index": 0, "delta": { "content": piece }, "finish_reason": Value::Null }]
+        });
+        lines.push(format!("data: {}\n\n", event_content));
+    }
+
+    let event_done = json!({
         "id": id,
         "object": "chat.completion.chunk",
         "created": created,
         "model": model,
-        "choices": [{
-            "index": 0,
-            "delta": {},
-            "finish_reason": "stop"
-        }]
+        "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
     });
-    events.push(format!("data: {}\n\n", done_event));
-    events.push("data: [DONE]\n\n".to_string());
-
+    lines.push(format!("data: {}\n\n", event_done));
+    lines.push("data: [DONE]\n\n".to_string());
     let byte_stream = stream::iter(
-        events
+        lines
             .into_iter()
             .map(|s| Ok::<Vec<u8>, std::io::Error>(s.into_bytes())),
     );
@@ -1114,11 +1125,10 @@ fn stream_response_from_completion(final_json: Value) -> Response {
     response
 }
 
-fn split_for_sse(input: &str, chunk_size: usize) -> Vec<String> {
+fn split_text_chunks(input: &str, chunk_size: usize) -> Vec<String> {
     if input.is_empty() {
         return vec![];
     }
-
     let chars: Vec<char> = input.chars().collect();
     chars
         .chunks(chunk_size.max(1))
@@ -1126,11 +1136,71 @@ fn split_for_sse(input: &str, chunk_size: usize) -> Vec<String> {
         .collect()
 }
 
+async fn proxy_stream_passthrough(state: &ProxyState, body: Value) -> Response {
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{}/v1/chat/completions", state.llama_port);
+
+    let resp = match client.post(&url).json(&body).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": {
+                        "message": e.to_string(),
+                        "type": "proxy_error",
+                        "code": "bad_gateway"
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let status =
+        StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let byte_stream = resp
+        .bytes_stream()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
+
+    let mut response = Response::new(axum::body::boxed(StreamBody::new(byte_stream)));
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        "content-type",
+        HeaderValue::from_static("text/event-stream"),
+    );
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-cache"));
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", HeaderValue::from_static("no"));
+    response
+}
+
 async fn execute_tool(state: &ProxyState, name: &str, args: &Value) -> Result<Value, String> {
     match name {
         "get_hardware_info" => {
             let info = get_hardware_info()?;
             serde_json::to_value(info).map_err(|e| e.to_string())
+        }
+        "get_disk_usage" => {
+            let drive_raw = opt_string(args, "drive").unwrap_or_else(|| "D".to_string());
+            let drive = drive_raw.trim().trim_end_matches(':').to_uppercase();
+            if drive.len() != 1 || !drive.chars().all(|c| c.is_ascii_alphabetic()) {
+                return Err("Paramètre 'drive' invalide (ex: D)".into());
+            }
+
+            let ps = format!(
+                "$d = Get-PSDrive -Name '{}' -ErrorAction Stop; [PSCustomObject]@{{name=$d.Name; total_bytes=($d.Used + $d.Free); used_bytes=$d.Used; free_bytes=$d.Free; total_gb=[math]::Round((($d.Used + $d.Free)/1GB),2); used_gb=[math]::Round(($d.Used/1GB),2); free_gb=[math]::Round(($d.Free/1GB),2)}} | ConvertTo-Json -Compress",
+                drive
+            );
+            let out = run_shell_command(ps)?;
+            if let Ok(value) = serde_json::from_str::<Value>(&out) {
+                Ok(value)
+            } else {
+                Ok(json!({ "raw": out }))
+            }
         }
         "cmd" => {
             let command = required_string(args, "command")?;
