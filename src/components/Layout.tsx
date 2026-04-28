@@ -170,7 +170,7 @@ export default function Layout() {
                                 <McpPanel />
                             </div>
                             {activeTab === "Paramètres" && (
-                                <div className="overflow-y-auto p-8">
+                                <div className="h-full overflow-y-auto p-8">
                                     <SettingsPanel />
                                 </div>
                             )}

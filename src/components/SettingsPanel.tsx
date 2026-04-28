@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/tauri";
 import { useModelSettings, type TurboQuantType } from "../context/ModelSettingsContext";
 import { CONTEXT7_STORAGE_KEY } from "../tools/Context7Client";
 import { BRAVE_SEARCH_KEY, SERPER_SEARCH_KEY, TAVILY_SEARCH_KEY } from "../tools/SearchWeb";
@@ -29,6 +30,39 @@ export default function SettingsPanel() {
     const [tavilyKey, setTavilyKey] = useState(() => localStorage.getItem(TAVILY_SEARCH_KEY) ?? "");
     const [searchSaved, setSearchSaved] = useState(false);
 
+    // ── État serveur API ──────────────────────────────────────────────────────
+    const [apiPort, setApiPort] = useState<number>(() => {
+        const saved = localStorage.getItem("api_server_port");
+        return saved ? Number(saved) : 8766;
+    });
+    const [apiRunning, setApiRunning] = useState(false);
+    const [apiError, setApiError] = useState<string | null>(null);
+
+    useEffect(() => {
+        invoke<{ running: boolean; port: number }>("get_api_server_info")
+            .then((info) => {
+                setApiRunning(info.running);
+                if (info.running) setApiPort(info.port);
+            })
+            .catch(() => {});
+    }, []);
+
+    const toggleApiServer = async () => {
+        setApiError(null);
+        if (apiRunning) {
+            await invoke("stop_api_server").catch(() => {});
+            setApiRunning(false);
+        } else {
+            try {
+                await invoke("start_api_server", { port: apiPort });
+                localStorage.setItem("api_server_port", String(apiPort));
+                setApiRunning(true);
+            } catch (e) {
+                setApiError(String(e));
+            }
+        }
+    };
+
     const saveSearchKeys = () => {
         localStorage.setItem(BRAVE_SEARCH_KEY, braveKey.trim());
         localStorage.setItem(SERPER_SEARCH_KEY, serperKey.trim());
@@ -44,7 +78,7 @@ export default function SettingsPanel() {
     };
 
     return (
-        <div className="flex flex-col gap-6 p-6 text-white overflow-y-auto max-h-[calc(100vh-4rem)]">
+        <div className="flex flex-col gap-6 px-6 pt-6 pb-12 text-white">
             <h2 className="font-bold text-lg mb-2">Paramètres du modèle</h2>
 
             <div className="flex flex-col gap-3">
@@ -260,6 +294,61 @@ export default function SettingsPanel() {
                 >
                     {searchSaved ? "✓ Sauvegardé" : "Sauvegarder les clés"}
                 </button>
+            </div>
+
+            {/* ── Section Serveur API OpenAI ── */}
+            <div className="flex flex-col gap-3 border-t border-white/10 pt-5 mt-2">
+                <div>
+                    <h3 className="font-semibold text-sm text-white">Serveur API OpenAI</h3>
+                    <p className="text-xs text-slate-400 mt-1">
+                        Expose le LLM local via une API compatible OpenAI. Connecte Open WebUI ou n&apos;importe quel
+                        client en pointant sur cette URL.
+                    </p>
+                </div>
+
+                <div className="flex gap-2 items-end">
+                    <label className="flex flex-col gap-1 flex-1">
+                        <span className="text-sm text-slate-300">Port</span>
+                        <input
+                            type="number"
+                            min={1024}
+                            max={65535}
+                            value={apiPort}
+                            onChange={(e) => setApiPort(Number(e.target.value))}
+                            disabled={apiRunning}
+                            className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition focus:border-blue-400 disabled:opacity-50"
+                        />
+                    </label>
+                    <button
+                        onClick={toggleApiServer}
+                        className={`rounded-2xl border px-5 py-3 text-sm font-medium transition ${
+                            apiRunning
+                                ? "border-red-400/40 bg-red-500/10 text-red-300 hover:bg-red-500/20"
+                                : "border-emerald-400/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                        }`}
+                    >
+                        {apiRunning ? "Arrêter" : "Démarrer"}
+                    </button>
+                </div>
+
+                {apiRunning && (
+                    <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                            <span className="text-xs text-emerald-300 font-semibold">Actif</span>
+                        </div>
+                        <p className="text-xs font-mono text-white mt-1">http://localhost:{apiPort}/v1</p>
+                        <p className="text-xs text-slate-400 mt-1">
+                            Dans Open WebUI → Paramètres → Connexions → ajoute cette URL comme API OpenAI.
+                        </p>
+                    </div>
+                )}
+
+                {apiError && (
+                    <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2">
+                        {apiError}
+                    </p>
+                )}
             </div>
         </div>
     );

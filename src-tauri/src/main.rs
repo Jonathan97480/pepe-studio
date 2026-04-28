@@ -1,8 +1,10 @@
+#![recursion_limit = "512"]
 #![cfg_attr(
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
 
+mod api_server;
 mod db;
 mod dev_server;
 mod http_client;
@@ -16,6 +18,7 @@ mod search;
 mod skills;
 mod terminal_manager;
 
+use api_server::{get_api_server_info, start_api_server, stop_api_server, ApiServerState};
 use db::{
     delete_all_conversations, delete_conversation, delete_document, delete_model_config,
     delete_user_fact, get_all_model_configs, get_compressed_messages, get_conversation_plan,
@@ -68,6 +71,7 @@ fn main() {
             app.manage(TerminalManagerState::default());
             app.manage(InteractiveState::default());
             app.manage(AppLogger::new(&app.handle()));
+            app.manage(ApiServerState::default());
             Ok(())
         })
         .manage(LlamaState::default())
@@ -163,6 +167,9 @@ fn main() {
             list_terminals,
             close_terminal,
             get_terminal_history,
+            start_api_server,
+            stop_api_server,
+            get_api_server_info,
         ])
         .run(tauri::generate_context!())
         .expect("Erreur au lancement de Tauri");
