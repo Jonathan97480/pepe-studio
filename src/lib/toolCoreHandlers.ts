@@ -25,7 +25,10 @@ function markError(lastToolWasErrorRef: MutableRefObject<boolean>) {
 }
 
 function decodeEscapedContent(rawContent: unknown): string {
-    return String(rawContent ?? "").replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r");
+    return String(rawContent ?? "")
+        .replace(/\\n/g, "\n")
+        .replace(/\\t/g, "\t")
+        .replace(/\\r/g, "\r");
 }
 
 export async function handleSearchConversation(args: SharedArgs): Promise<boolean> {
@@ -188,11 +191,7 @@ export async function handlePatchFileJson(args: SharedArgs): Promise<boolean> {
     }
 
     try {
-        const result = await invokeWithTimeout<string>(
-            "patch_file",
-            { path: filePath, search, replace },
-            20000,
-        );
+        const result = await invokeWithTimeout<string>("patch_file", { path: filePath, search, replace }, 20000);
         await sendPrompt(
             `[patch_file] ${result}\nRAPPEL : utilise le format TAG <patch_file path="..."> à l'avenir, pas le format JSON.`,
             cfg,
@@ -234,6 +233,15 @@ export async function handleRunCommand(
 export async function handleUnknownTool(args: SharedArgs): Promise<void> {
     const { parsedTool, cfg, sendPrompt } = args;
     const knownKeys = Object.keys(parsedTool).join(", ");
+
+    if (parsedTool.images !== undefined) {
+        await sendPrompt(
+            `[Système] La clé \`images\` n'est pas un outil. C'est une catégorie.\nUtilise une vraie clé d'outil, par exemple :\n<tool>{"generate_image":"un chat roux mignon"}</tool>\nou\n<tool>{"list_sd_models":true}</tool>`,
+            cfg,
+        );
+        return;
+    }
+
     await sendPrompt(
         `[Système] Outil inconnu ou clé non reconnue : { ${knownKeys} }.\nVérifie le nom de l'outil avec get_tool_doc ou consulte la liste des outils disponibles.`,
         cfg,
@@ -276,3 +284,4 @@ export async function runWriteFileBatch(
         config,
     );
 }
+

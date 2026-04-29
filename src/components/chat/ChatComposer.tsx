@@ -40,6 +40,9 @@ interface ChatComposerProps {
     onCancelGeneration: () => void;
     error: string | null;
     autoLoadError: string | null;
+    showSDFormatPicker: boolean;
+    onToggleSDFormatPicker: () => void;
+    selectedSDFormat: string | null;
 }
 
 export function ChatComposer({
@@ -78,6 +81,9 @@ export function ChatComposer({
     onCancelGeneration,
     error,
     autoLoadError,
+    showSDFormatPicker,
+    onToggleSDFormatPicker,
+    selectedSDFormat,
 }: ChatComposerProps) {
     return (
         <div className="border-t border-white/10 bg-slate-950/80 px-6 pb-6 pt-4 backdrop-blur-xl">
@@ -263,6 +269,20 @@ export function ChatComposer({
                     </button>
                     <button
                         type="button"
+                        onClick={onToggleSDFormatPicker}
+                        title={
+                            showSDFormatPicker ? "Masquer le sélecteur de format image" : "Choisir le format d'image SD"
+                        }
+                        className={`flex h-10 w-10 items-center justify-center rounded-2xl border text-lg transition ${
+                            showSDFormatPicker || selectedSDFormat
+                                ? "border-indigo-400/60 bg-indigo-500/20 text-indigo-300"
+                                : "border-white/10 bg-white/5 text-slate-400 hover:border-indigo-400/40 hover:text-indigo-300"
+                        }`}
+                    >
+                        {selectedSDFormat ? `🖼️` : "🖼️"}
+                    </button>
+                    <button
+                        type="button"
                         onClick={onToggleMic}
                         title={isListening ? "Arrêter la dictée" : "Dicter un message"}
                         className={`flex h-10 w-10 items-center justify-center rounded-2xl border text-lg transition ${
@@ -289,9 +309,7 @@ export function ChatComposer({
                         type="button"
                         onClick={onToggleDeepThinking}
                         title={
-                            deepThinkingEnabled
-                                ? "Désactiver la réflexion profonde"
-                                : "Activer la réflexion profonde"
+                            deepThinkingEnabled ? "Désactiver la réflexion profonde" : "Activer la réflexion profonde"
                         }
                         className={`flex h-10 items-center gap-1.5 rounded-2xl border px-3 text-sm transition ${
                             deepThinkingEnabled
@@ -330,3 +348,4 @@ export function ChatComposer({
         </div>
     );
 }
+

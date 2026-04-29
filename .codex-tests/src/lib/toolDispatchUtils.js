@@ -1,13 +1,12 @@
-import { TOOL_DOCS } from "./toolDocs";
-
-export type ParsedToolLike = Record<string, unknown>;
-export type ToolCatalogEntry = {
-    id: string;
-    category: string;
-    purpose: string;
-};
-
-export const TOOL_CATALOG: ToolCatalogEntry[] = [
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.TOOL_CATALOG = void 0;
+exports.isActionTool = isActionTool;
+exports.describeTool = describeTool;
+exports.resolveToolDoc = resolveToolDoc;
+exports.buildCompactToolCatalog = buildCompactToolCatalog;
+const toolDocs_1 = require("./toolDocs");
+exports.TOOL_CATALOG = [
     { id: "get_hardware_info", category: "machine", purpose: "obtenir la RAM, le CPU et le GPU détecté" },
     { id: "cmd", category: "terminal", purpose: "commande PowerShell ponctuelle" },
     { id: "create_terminal", category: "terminal", purpose: "ouvrir un terminal persistant avec cwd" },
@@ -70,7 +69,6 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     { id: "save_fact", category: "profil", purpose: "balise inline pour mémoriser un fait utilisateur" },
     { id: "get_tool_doc", category: "docs", purpose: "obtenir la doc détaillée d'un outil" },
 ];
-
 const ACTION_TOOL_KEYS = [
     "create_skill",
     "run_skill",
@@ -100,14 +98,10 @@ const ACTION_TOOL_KEYS = [
     "terminal_send_stdin",
     "close_terminal",
 ];
-
-export function isActionTool(parsedTool: ParsedToolLike): boolean {
-    return ACTION_TOOL_KEYS.some(
-        (key) => parsedTool[key] !== undefined && parsedTool[key] !== null && parsedTool[key] !== "",
-    );
+function isActionTool(parsedTool) {
+    return ACTION_TOOL_KEYS.some((key) => parsedTool[key] !== undefined && parsedTool[key] !== null && parsedTool[key] !== "");
 }
-
-export function describeTool(parsedTool: ParsedToolLike): string {
+function describeTool(parsedTool) {
     const orderedKeys = [
         "cmd",
         "command",
@@ -122,27 +116,18 @@ export function describeTool(parsedTool: ParsedToolLike): string {
         "open_browser",
         "start_dev_server",
     ];
-
     for (const key of orderedKeys) {
         const value = parsedTool[key];
         if (value !== undefined && value !== null && value !== "") {
             return String(value);
         }
     }
-
     return "action";
 }
-
-export function resolveToolDoc(
-    queryValue: unknown,
-):
-    | { type: "exact"; title: string; body: string }
-    | { type: "matches"; title: string; body: string }
-    | { type: "missing"; title: string; body: string } {
+function resolveToolDoc(queryValue) {
     const rawQuery = String(queryValue ?? "");
     const query = rawQuery.toLowerCase().trim();
-    const exactMatch = TOOL_DOCS[query];
-
+    const exactMatch = toolDocs_1.TOOL_DOCS[query];
     if (exactMatch) {
         return {
             type: "exact",
@@ -150,8 +135,7 @@ export function resolveToolDoc(
             body: exactMatch,
         };
     }
-
-    const matches = Object.entries(TOOL_DOCS).filter(([key]) => key.toLowerCase().includes(query));
+    const matches = Object.entries(toolDocs_1.TOOL_DOCS).filter(([key]) => key.toLowerCase().includes(query));
     if (matches.length === 1) {
         return {
             type: "matches",
@@ -159,7 +143,6 @@ export function resolveToolDoc(
             body: matches[0][1],
         };
     }
-
     if (matches.length > 1) {
         return {
             type: "matches",
@@ -167,29 +150,26 @@ export function resolveToolDoc(
             body: matches.map(([, doc]) => doc).join("\n\n" + "—".repeat(60) + "\n\n"),
         };
     }
-
     return {
         type: "missing",
         title: `[get_tool_doc] Aucun outil trouvé pour "${rawQuery}".`,
-        body: `Outils documentés :\n${Object.keys(TOOL_DOCS).join(", ")}`,
+        body: `Outils documentés :\n${Object.keys(toolDocs_1.TOOL_DOCS).join(", ")}`,
     };
 }
-
-export function buildCompactToolCatalog(enabledIds?: Set<string>): string {
-    const groups = new Map<string, ToolCatalogEntry[]>();
-    for (const entry of TOOL_CATALOG) {
+function buildCompactToolCatalog(enabledIds) {
+    const groups = new Map();
+    for (const entry of exports.TOOL_CATALOG) {
         if (enabledIds && entry.id !== "get_tool_doc" && entry.id !== "ask_user" && !enabledIds.has(entry.id)) {
             continue;
         }
-        if (!groups.has(entry.category)) groups.set(entry.category, []);
+        if (!groups.has(entry.category))
+            groups.set(entry.category, []);
         groups.get(entry.category)?.push(entry);
     }
-
     return [...groups.entries()]
         .map(([category, entries]) => {
-            const items = entries.map((entry) => `- ${entry.id}: ${entry.purpose}`).join("\n");
-            return `[catégorie: ${category} - ce libellé n'est PAS une clé d'outil]\n${items}`;
-        })
+        const items = entries.map((entry) => `- ${entry.id}: ${entry.purpose}`).join("\n");
+        return `[catégorie: ${category} - ce libellé n'est PAS une clé d'outil]\n${items}`;
+    })
         .join("\n\n");
 }
-

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 export type TurboQuantType = "none" | "q8_0" | "q4_0" | "q4_1" | "q5_0" | "q5_1";
@@ -42,6 +42,7 @@ export type ModelSettings = {
     reasoningBudget: number;
     sampling: SamplingSettings;
     thinkingEnabled: boolean;
+    sdModelPath: string | null;
 };
 
 export type ModelSettingsContextValue = ModelSettings & {
@@ -57,6 +58,7 @@ export type ModelSettingsContextValue = ModelSettings & {
     setReasoningBudget: (value: number) => void;
     setSampling: (value: SamplingSettings | ((prev: SamplingSettings) => SamplingSettings)) => void;
     setThinkingEnabled: (value: boolean) => void;
+    setSdModelPath: (value: string | null) => void;
     // État de chargement (partagé entre ChatWindow et ModelsPanel)
     isModelLoaded: boolean;
     setIsModelLoaded: (value: boolean) => void;
@@ -101,6 +103,7 @@ const defaultSettings: ModelSettings = {
     reasoningBudget: 64,
     sampling: defaultSampling,
     thinkingEnabled: true,
+    sdModelPath: null,
 };
 
 const ModelSettingsContext = createContext<ModelSettingsContextValue | null>(null);
@@ -118,8 +121,24 @@ export function ModelSettingsProvider({ children }: { children: ReactNode }) {
     const [reasoningBudget, setReasoningBudget] = useState(defaultSettings.reasoningBudget);
     const [sampling, setSampling] = useState<SamplingSettings>(defaultSettings.sampling);
     const [thinkingEnabled, setThinkingEnabled] = useState(defaultSettings.thinkingEnabled);
+    const [sdModelPath, setSdModelPath] = useState<string | null>(defaultSettings.sdModelPath);
     const [isModelLoaded, setIsModelLoaded] = useState(false);
     const [loadedModelPath, setLoadedModelPath] = useState<string | null>(null);
+
+    useEffect(() => {
+        const stored = localStorage.getItem("customapp_sd_model_path");
+        if (stored) {
+            setSdModelPath(stored);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (sdModelPath) {
+            localStorage.setItem("customapp_sd_model_path", sdModelPath);
+        } else {
+            localStorage.removeItem("customapp_sd_model_path");
+        }
+    }, [sdModelPath]);
 
     const value = useMemo(
         () => ({
@@ -135,6 +154,7 @@ export function ModelSettingsProvider({ children }: { children: ReactNode }) {
             reasoningBudget,
             sampling,
             thinkingEnabled,
+            sdModelPath,
             setModelPath,
             setTemperature,
             setContextWindow,
@@ -147,6 +167,7 @@ export function ModelSettingsProvider({ children }: { children: ReactNode }) {
             setReasoningBudget,
             setSampling,
             setThinkingEnabled,
+            setSdModelPath,
             isModelLoaded,
             setIsModelLoaded,
             loadedModelPath,
@@ -165,6 +186,7 @@ export function ModelSettingsProvider({ children }: { children: ReactNode }) {
             reasoningBudget,
             sampling,
             thinkingEnabled,
+            sdModelPath,
             isModelLoaded,
             loadedModelPath,
         ],

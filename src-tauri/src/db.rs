@@ -49,9 +49,12 @@ pub struct ConversationItem {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversationMessage {
     pub role: String,
     pub content: String,
+    pub image_path: Option<String>,
+    pub display_only: bool,
 }
 
 pub struct DbState(pub Mutex<Connection>);
@@ -171,6 +174,8 @@ pub fn init_db(app: &AppHandle) -> Connection {
             conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
+            image_path TEXT,
+            display_only INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );",
     )
@@ -185,6 +190,10 @@ pub fn init_db(app: &AppHandle) -> Connection {
     )
     .ok();
     conn.execute_batch("ALTER TABLE messages ADD COLUMN meta_tag TEXT NOT NULL DEFAULT '';")
+        .ok();
+    conn.execute_batch("ALTER TABLE messages ADD COLUMN image_path TEXT;")
+        .ok();
+    conn.execute_batch("ALTER TABLE messages ADD COLUMN display_only INTEGER NOT NULL DEFAULT 0;")
         .ok();
 
     // Migration : ajouter project_structure pour stocker la structure du projet par conversation
@@ -727,12 +736,20 @@ pub fn save_message(
     conversation_id: i64,
     role: String,
     content: String,
+    image_path: Option<String>,
+    display_only: Option<bool>,
     state: State<'_, DbState>,
 ) -> Result<(), String> {
     let conn = state.0.lock().unwrap();
     conn.execute(
-        "INSERT INTO messages (conversation_id, role, content) VALUES (?1, ?2, ?3)",
-        params![conversation_id, role, content],
+        "INSERT INTO messages (conversation_id, role, content, image_path, display_only) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            conversation_id,
+            role,
+            content,
+            image_path,
+            if display_only.unwrap_or(false) { 1 } else { 0 }
+        ],
     )
     .map_err(|e| e.to_string())?;
     // Auto-titre : premier message user → titre de la conv
@@ -1137,19 +1154,40 @@ pub fn load_conversation_messages(
 ) -> Result<Vec<ConversationMessage>, String> {
     let conn = state.0.lock().unwrap();
     let mut stmt = conn
-        .prepare("SELECT role, content FROM messages WHERE conversation_id = ?1 ORDER BY id ASC")
+        .prepare(
+            "SELECT role, content, image_path, display_only FROM messages WHERE conversation_id = ?1 ORDER BY id ASC",
+        )
         .map_err(|e| e.to_string())?;
     let results: Vec<ConversationMessage> = stmt
         .query_map([conversation_id], |row| {
+            let display_only_flag: i64 = row.get(3)?;
             Ok(ConversationMessage {
                 role: row.get(0)?,
                 content: row.get(1)?,
+                image_path: row.get(2)?,
+                display_only: display_only_flag != 0,
             })
         })
         .map_err(|e| e.to_string())?
         .flatten()
         .collect();
     Ok(results)
+}
+
+/// Supprime un message image persisté dans une conversation.
+#[command]
+pub fn delete_image_message(
+    conversation_id: i64,
+    image_path: String,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
+    let conn = state.0.lock().unwrap();
+    conn.execute(
+        "DELETE FROM messages WHERE conversation_id = ?1 AND image_path = ?2",
+        params![conversation_id, image_path],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Supprime une conversation et tous ses messages (CASCADE via FK).

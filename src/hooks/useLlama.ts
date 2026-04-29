@@ -17,7 +17,9 @@ type LlamaApiContent = string | Array<LlamaApiTextPart | LlamaApiImagePart>;
 
 const safeInvoke = async <T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
     if (typeof window === "undefined") {
-        throw new Error("Tauri invoke unavailable. Assure-toi de lancer l'application depuis le runtime Tauri, pas depuis le navigateur web.");
+        throw new Error(
+            "Tauri invoke unavailable. Assure-toi de lancer l'application depuis le runtime Tauri, pas depuis le navigateur web.",
+        );
     }
 
     const tauri = (window as TauriWindowShape).__TAURI__;
@@ -52,12 +54,14 @@ const safeInvoke = async <T = unknown>(cmd: string, args?: Record<string, unknow
         }
     }
 
-    throw new Error("Tauri invoke unavailable. Assure-toi de lancer l'application depuis le runtime Tauri, pas depuis le navigateur web.");
+    throw new Error(
+        "Tauri invoke unavailable. Assure-toi de lancer l'application depuis le runtime Tauri, pas depuis le navigateur web.",
+    );
 };
 
 export type LlamaMessage = {
     role: "user" | "assistant" | "system";
-    content: string;       // contenu d'affichage (peut contenir 📎 nom de fichier)
+    content: string; // contenu d'affichage (peut contenir 📎 nom de fichier)
     apiContent?: LlamaApiContent; // contenu réel envoyé à l'API (inclut le texte des documents joints)
     thinking?: string;
     thinkingDone?: boolean;
@@ -65,14 +69,16 @@ export type LlamaMessage = {
     thinkingFromTag?: boolean; // true si le bloc thinking vient de balises <think>...</think> (pas de is_thinking:true)
     meta?: string;
     displayOnly?: boolean; // true = affiché dans le chat mais exclu de l'historique API (message en attente)
+    imageDataUrl?: string; // data URL base64 pour affichage direct d'une image générée
+    imagePath?: string; // chemin disque de l'image générée pour rechargement/suppression
 };
 
 export type Attachment = {
     name: string;
     mimeType: string;
-    dataUrl?: string;   // data URL base64 pour les images (redimensionnées)
-    text?: string;      // contenu texte pour les fichiers non-image
-    docId?: number;     // id SQLite du document RAG indexé (PDF)
+    dataUrl?: string; // data URL base64 pour les images (redimensionnées)
+    text?: string; // contenu texte pour les fichiers non-image
+    docId?: number; // id SQLite du document RAG indexé (PDF)
     totalPages?: number; // nombre de pages du document
 };
 
@@ -132,9 +138,7 @@ export function useLlama() {
         const visibleChars = Array.from(trimmed).filter((ch) => !/\s/.test(ch));
         if (visibleChars.length < 12) return false;
 
-        const questionLikeCount = visibleChars.filter((ch) =>
-            ch === "?" || ch === "�" || ch === "\uFFFD"
-        ).length;
+        const questionLikeCount = visibleChars.filter((ch) => ch === "?" || ch === "�" || ch === "\uFFFD").length;
         const alphaNumCount = visibleChars.filter((ch) => /[\p{L}\p{N}]/u.test(ch)).length;
         const punctuationOnly = alphaNumCount === 0;
         const questionRatio = questionLikeCount / visibleChars.length;
@@ -143,34 +147,37 @@ export function useLlama() {
     }, []);
 
     /** Détecte si le texte assistant visible contient une vraie séquence répétée en boucle */
-    const detectRepetitionLoop = useCallback((buffer: string): boolean => {
-        const normalized = normalizeVisibleAssistantText(buffer);
-        if (normalized.length < 260) return false;
-        const alphaChars = (normalized.match(/[A-Za-zÀ-ÿ]/g) ?? []).length;
-        if (alphaChars < 180) return false;
+    const detectRepetitionLoop = useCallback(
+        (buffer: string): boolean => {
+            const normalized = normalizeVisibleAssistantText(buffer);
+            if (normalized.length < 260) return false;
+            const alphaChars = (normalized.match(/[A-Za-zÀ-ÿ]/g) ?? []).length;
+            if (alphaChars < 180) return false;
 
-        const tail = normalized.slice(-700);
-        for (let len = 30; len <= 120; len++) {
-            const pattern = tail.slice(-len).trim();
-            if (pattern.length < 24) continue;
-            const wordCount = pattern.split(/\s+/).filter(Boolean).length;
-            if (wordCount < 4) continue;
+            const tail = normalized.slice(-700);
+            for (let len = 30; len <= 120; len++) {
+                const pattern = tail.slice(-len).trim();
+                if (pattern.length < 24) continue;
+                const wordCount = pattern.split(/\s+/).filter(Boolean).length;
+                if (wordCount < 4) continue;
 
-            let count = 0;
-            let pos = tail.length - len;
-            while (pos >= 0) {
-                const segment = tail.slice(pos, pos + len).trim();
-                if (segment === pattern) {
-                    count++;
-                    pos -= len;
-                } else {
-                    break;
+                let count = 0;
+                let pos = tail.length - len;
+                while (pos >= 0) {
+                    const segment = tail.slice(pos, pos + len).trim();
+                    if (segment === pattern) {
+                        count++;
+                        pos -= len;
+                    } else {
+                        break;
+                    }
                 }
+                if (count >= 4) return true;
             }
-            if (count >= 4) return true;
-        }
-        return false;
-    }, [normalizeVisibleAssistantText]);
+            return false;
+        },
+        [normalizeVisibleAssistantText],
+    );
 
     const unlistenRef = useRef<{ stream?: UnlistenFn; done?: UnlistenFn; error?: UnlistenFn; usage?: UnlistenFn }>({});
 
@@ -193,12 +200,24 @@ export function useLlama() {
                     const activePromptId = activePromptIdRef.current;
                     const lastPromptId = lastPromptIdRef.current;
                     const activeStreaming = streamingRef.current;
-                    debugLog(`llama-stream event prompt_id=${payload.prompt_id} chunk=${payload.chunk} is_thinking=${payload.is_thinking} activePromptId=${activePromptId} lastPromptId=${lastPromptId} activeStreaming=${activeStreaming}`);
-                    console.log("[useLlama] llama-stream event", payload, { activePromptId, lastPromptId, activeStreaming });
+                    debugLog(
+                        `llama-stream event prompt_id=${payload.prompt_id} chunk=${payload.chunk} is_thinking=${payload.is_thinking} activePromptId=${activePromptId} lastPromptId=${lastPromptId} activeStreaming=${activeStreaming}`,
+                    );
+                    console.log("[useLlama] llama-stream event", payload, {
+                        activePromptId,
+                        lastPromptId,
+                        activeStreaming,
+                    });
                     const validPrompt = payload.prompt_id === activePromptId || payload.prompt_id === lastPromptId;
                     if (!validPrompt && !activeStreaming) {
-                        debugLog(`llama-stream ignored due to prompt id mismatch payload=${payload.prompt_id} current=${activePromptId} last=${lastPromptId}`);
-                        console.log("[useLlama] llama-stream ignored due to prompt id mismatch", { payloadPromptId: payload.prompt_id, currentPromptId: activePromptId, lastPromptId: lastPromptId });
+                        debugLog(
+                            `llama-stream ignored due to prompt id mismatch payload=${payload.prompt_id} current=${activePromptId} last=${lastPromptId}`,
+                        );
+                        console.log("[useLlama] llama-stream ignored due to prompt id mismatch", {
+                            payloadPromptId: payload.prompt_id,
+                            currentPromptId: activePromptId,
+                            lastPromptId: lastPromptId,
+                        });
                         return;
                     }
 
@@ -231,7 +250,9 @@ export function useLlama() {
                             if (lastMsg?.role === "assistant") {
                                 next[next.length - 1] = {
                                     ...lastMsg,
-                                    content: lastMsg.content + "\n\n⚠️ *Génération interrompue — boucle de répétition détectée.*",
+                                    content:
+                                        lastMsg.content +
+                                        "\n\n⚠️ *Génération interrompue — boucle de répétition détectée.*",
                                 };
                             }
                             return next;
@@ -267,17 +288,22 @@ export function useLlama() {
                         const thinkCloseMatch = !isThinking ? thinkCloseRegex.exec(chunkText) : null;
 
                         const stripThinkingMarkers = (text: string) =>
-                            text.replace(/\[end thinking\]/gi, "").replace(/\[start thinking\]/gi, "").trim();
-                        const cleanChunk = (text: string) => {
-                            return text
+                            text
                                 .replace(/\[end thinking\]/gi, "")
                                 .replace(/\[start thinking\]/gi, "")
-                                .replace(/<think>/gi, "")
-                                .replace(/<\/think>/gi, "")
-                                .replace(/<unused\d+>/g, "")
-                                // Normaliser les variantes de tool call (Gemma 4: <|tool_call>tool>, etc.)
-                                .replace(/<\|tool_call\|?>(?:\w*>)?/gi, "<tool>")
-                                .replace(/<\|?\/?tool_call\|?>/gi, "</tool>");
+                                .trim();
+                        const cleanChunk = (text: string) => {
+                            return (
+                                text
+                                    .replace(/\[end thinking\]/gi, "")
+                                    .replace(/\[start thinking\]/gi, "")
+                                    .replace(/<think>/gi, "")
+                                    .replace(/<\/think>/gi, "")
+                                    .replace(/<unused\d+>/g, "")
+                                    // Normaliser les variantes de tool call (Gemma 4: <|tool_call>tool>, etc.)
+                                    .replace(/<\|tool_call\|?>(?:\w*>)?/gi, "<tool>")
+                                    .replace(/<\|?\/?tool_call\|?>/gi, "</tool>")
+                            );
                         };
 
                         const mergeStreamingChunks = (existing: string, incoming: string) => {
@@ -294,7 +320,8 @@ export function useLlama() {
 
                         const appendToThinking = (message: LlamaMessage, text: string) => ({
                             ...message,
-                            thinking: message.thinking !== undefined ? message.thinking + text : stripThinkingMarkers(text),
+                            thinking:
+                                message.thinking !== undefined ? message.thinking + text : stripThinkingMarkers(text),
                         });
 
                         if (last && last.role === "assistant") {
@@ -307,7 +334,11 @@ export function useLlama() {
                                     updatedLast = appendToThinking(updatedLast, chunkText);
                                 }
                                 // Si thinkingDone=true (ne devrait pas arriver), on ignore
-                            } else if (thinkCloseMatch && updatedLast.thinking !== undefined && !updatedLast.thinkingDone) {
+                            } else if (
+                                thinkCloseMatch &&
+                                updatedLast.thinking !== undefined &&
+                                !updatedLast.thinkingDone
+                            ) {
                                 // </think> : fin du bloc de réflexion
                                 const before = chunkText.slice(0, thinkCloseMatch.index ?? 0);
                                 const after = chunkText.slice((thinkCloseMatch.index ?? 0) + thinkCloseMatch[0].length);
@@ -318,13 +349,21 @@ export function useLlama() {
                                     thinkingCollapsed: true,
                                 };
                                 if (after.trim()) updatedLast = appendToContent(updatedLast, after);
-                            } else if (thinkOpenMatch && !updatedLast.thinkingDone && updatedLast.thinking === undefined) {
+                            } else if (
+                                thinkOpenMatch &&
+                                !updatedLast.thinkingDone &&
+                                updatedLast.thinking === undefined
+                            ) {
                                 // <think> : début du bloc de réflexion
                                 const before = cleanChunk(chunkText.slice(0, thinkOpenMatch.index ?? 0));
                                 const after = chunkText.slice((thinkOpenMatch.index ?? 0) + thinkOpenMatch[0].length);
                                 if (before.trim()) updatedLast = appendToContent(updatedLast, before);
                                 updatedLast = { ...updatedLast, thinking: after, thinkingFromTag: true };
-                            } else if (updatedLast.thinking !== undefined && !updatedLast.thinkingDone && updatedLast.thinkingFromTag) {
+                            } else if (
+                                updatedLast.thinking !== undefined &&
+                                !updatedLast.thinkingDone &&
+                                updatedLast.thinkingFromTag
+                            ) {
                                 // Chunk intermédiaire à l'intérieur d'un bloc <think>...</think> explicite
                                 // NOTE: ne pas utiliser ce chemin pour is_thinking:true → la transition vers is_thinking:false
                                 // doit passer par le else ci-dessous pour fermer le bloc
@@ -344,7 +383,9 @@ export function useLlama() {
                             } else if (startMarkerMatch && !last.thinkingDone && last.thinking === undefined) {
                                 // Fallback: [Start thinking] dans content
                                 const before = cleanChunk(chunkText.slice(0, startMarkerMatch.index ?? 0));
-                                const after = chunkText.slice((startMarkerMatch.index ?? 0) + startMarkerMatch[0].length).trimStart();
+                                const after = chunkText
+                                    .slice((startMarkerMatch.index ?? 0) + startMarkerMatch[0].length)
+                                    .trimStart();
                                 if (before) updatedLast = appendToContent(updatedLast, before);
                                 updatedLast = { ...updatedLast, thinking: after };
                             } else {
@@ -366,8 +407,20 @@ export function useLlama() {
                         // Nouveau message assistant
                         const newMessage: LlamaMessage = {
                             role: "assistant",
-                            content: isThinking ? "" : (thinkOpenMatch ? cleanChunk(chunkText.slice(0, thinkOpenMatch.index ?? 0)) : (markerMatch ? cleanChunk(chunkText.slice((markerMatch.index ?? 0) + markerMatch[0].length)) : chunkText)),
-                            thinking: isThinking ? chunkText : (thinkOpenMatch ? chunkText.slice((thinkOpenMatch.index ?? 0) + thinkOpenMatch[0].length) : (markerMatch ? stripThinkingMarkers(chunkText.slice(0, markerMatch.index ?? 0)) : undefined)),
+                            content: isThinking
+                                ? ""
+                                : thinkOpenMatch
+                                  ? cleanChunk(chunkText.slice(0, thinkOpenMatch.index ?? 0))
+                                  : markerMatch
+                                    ? cleanChunk(chunkText.slice((markerMatch.index ?? 0) + markerMatch[0].length))
+                                    : chunkText,
+                            thinking: isThinking
+                                ? chunkText
+                                : thinkOpenMatch
+                                  ? chunkText.slice((thinkOpenMatch.index ?? 0) + thinkOpenMatch[0].length)
+                                  : markerMatch
+                                    ? stripThinkingMarkers(chunkText.slice(0, markerMatch.index ?? 0))
+                                    : undefined,
                             thinkingDone: !isThinking && (!!markerMatch || !!thinkCloseMatch),
                             thinkingCollapsed: !isThinking && (!!markerMatch || !!thinkCloseMatch),
                             thinkingFromTag: !!thinkOpenMatch,
@@ -381,16 +434,33 @@ export function useLlama() {
                 debugLog("llama-stream listener registered");
 
                 unlistenDone = await listen("llama-done", (event) => {
-                    const payload = event.payload as { prompt_id: string; done: boolean; meta?: string | null; prompt_tokens?: number | null };
+                    const payload = event.payload as {
+                        prompt_id: string;
+                        done: boolean;
+                        meta?: string | null;
+                        prompt_tokens?: number | null;
+                    };
                     const activePromptId = activePromptIdRef.current;
                     const lastPromptId = lastPromptIdRef.current;
                     const activeStreaming = streamingRef.current;
-                    debugLog(`llama-done event prompt_id=${payload.prompt_id} done=${payload.done} meta=${payload.meta} activePromptId=${activePromptId} lastPromptId=${lastPromptId} activeStreaming=${activeStreaming}`);
-                    console.log("[useLlama] llama-done event", payload, { activePromptId, lastPromptId, activeStreaming });
+                    debugLog(
+                        `llama-done event prompt_id=${payload.prompt_id} done=${payload.done} meta=${payload.meta} activePromptId=${activePromptId} lastPromptId=${lastPromptId} activeStreaming=${activeStreaming}`,
+                    );
+                    console.log("[useLlama] llama-done event", payload, {
+                        activePromptId,
+                        lastPromptId,
+                        activeStreaming,
+                    });
                     const validPrompt = payload.prompt_id === activePromptId || payload.prompt_id === lastPromptId;
                     if (!validPrompt && !activeStreaming) {
-                        debugLog(`llama-done ignored due to prompt id mismatch payload=${payload.prompt_id} current=${activePromptId} last=${lastPromptId}`);
-                        console.log("[useLlama] llama-done ignored due to prompt id mismatch", { payloadPromptId: payload.prompt_id, currentPromptId: activePromptId, lastPromptId: lastPromptId });
+                        debugLog(
+                            `llama-done ignored due to prompt id mismatch payload=${payload.prompt_id} current=${activePromptId} last=${lastPromptId}`,
+                        );
+                        console.log("[useLlama] llama-done ignored due to prompt id mismatch", {
+                            payloadPromptId: payload.prompt_id,
+                            currentPromptId: activePromptId,
+                            lastPromptId: lastPromptId,
+                        });
                         return;
                     }
                     // Appliquer les timings sur le dernier message assistant
@@ -406,7 +476,10 @@ export function useLlama() {
                     }
                     // Mettre à jour l'usage tokens si disponible (raffinement avec vraie valeur)
                     if (payload.prompt_tokens != null && payload.prompt_tokens > 0) {
-                        setTokenUsage((prev) => ({ used: payload.prompt_tokens as number, limit: prev?.limit ?? contextWindowRef.current ?? 4096 }));
+                        setTokenUsage((prev) => ({
+                            used: payload.prompt_tokens as number,
+                            limit: prev?.limit ?? contextWindowRef.current ?? 4096,
+                        }));
                     }
                     setStreaming(false);
                     streamingRef.current = false;
@@ -423,12 +496,24 @@ export function useLlama() {
                     const activePromptId = activePromptIdRef.current;
                     const lastPromptId = lastPromptIdRef.current;
                     const activeStreaming = streamingRef.current;
-                    debugLog(`llama-error event prompt_id=${payload.prompt_id} error=${payload.error} activePromptId=${activePromptId} lastPromptId=${lastPromptId} activeStreaming=${activeStreaming}`);
-                    console.log("[useLlama] llama-error event", payload, { activePromptId, lastPromptId, activeStreaming });
+                    debugLog(
+                        `llama-error event prompt_id=${payload.prompt_id} error=${payload.error} activePromptId=${activePromptId} lastPromptId=${lastPromptId} activeStreaming=${activeStreaming}`,
+                    );
+                    console.log("[useLlama] llama-error event", payload, {
+                        activePromptId,
+                        lastPromptId,
+                        activeStreaming,
+                    });
                     const validPrompt = payload.prompt_id === activePromptId || payload.prompt_id === lastPromptId;
                     if (!validPrompt && !activeStreaming) {
-                        debugLog(`llama-error ignored due to prompt id mismatch payload=${payload.prompt_id} current=${activePromptId} last=${lastPromptId}`);
-                        console.log("[useLlama] llama-error ignored due to prompt id mismatch", { payloadPromptId: payload.prompt_id, currentPromptId: activePromptId, lastPromptId: lastPromptId });
+                        debugLog(
+                            `llama-error ignored due to prompt id mismatch payload=${payload.prompt_id} current=${activePromptId} last=${lastPromptId}`,
+                        );
+                        console.log("[useLlama] llama-error ignored due to prompt id mismatch", {
+                            payloadPromptId: payload.prompt_id,
+                            currentPromptId: activePromptId,
+                            lastPromptId: lastPromptId,
+                        });
                         return;
                     }
                     setError(payload.error);
@@ -445,7 +530,10 @@ export function useLlama() {
                 unlistenUsage = await listen("llama-usage", (event) => {
                     const payload = event.payload as { prompt_id: string; prompt_tokens?: number | null };
                     if (payload.prompt_tokens != null && payload.prompt_tokens > 0) {
-                        setTokenUsage((prev) => ({ used: payload.prompt_tokens as number, limit: prev?.limit ?? contextWindowRef.current ?? 4096 }));
+                        setTokenUsage((prev) => ({
+                            used: payload.prompt_tokens as number,
+                            limit: prev?.limit ?? contextWindowRef.current ?? 4096,
+                        }));
                     }
                 });
 
@@ -513,218 +601,215 @@ export function useLlama() {
         }
     }, []);
 
-    const sendPrompt = useCallback(async (
-        prompt: string,
-        params?: Partial<LlamaLaunchConfig>,
-        attachments?: Attachment[],
-        skipUserMessage?: boolean,
-    ) => {
-        setError(null);
-        setLoading(true);
-        setStreaming(true);
-        streamingRef.current = true;
-        // Réinitialiser la détection de boucle
-        streamBufferRef.current = "";
-        repetitionAbortedRef.current = false;
-        assistantVisibleBufferRef.current = "";
-        const promptId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        console.log("[useLlama] sendPrompt", { promptId, prompt, params });
-        currentPromptIdRef.current = promptId;
-        activePromptIdRef.current = promptId;
-        lastPromptIdRef.current = promptId;
-        debugLog(`sendPrompt assigned promptId=${promptId} activePromptId=${activePromptIdRef.current} lastPromptId=${lastPromptIdRef.current}`);
-        setCurrentPromptId(promptId);
+    const sendPrompt = useCallback(
+        async (
+            prompt: string,
+            params?: Partial<LlamaLaunchConfig>,
+            attachments?: Attachment[],
+            skipUserMessage?: boolean,
+        ) => {
+            setError(null);
+            setLoading(true);
+            setStreaming(true);
+            streamingRef.current = true;
+            // Réinitialiser la détection de boucle
+            streamBufferRef.current = "";
+            repetitionAbortedRef.current = false;
+            assistantVisibleBufferRef.current = "";
+            const promptId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            console.log("[useLlama] sendPrompt", { promptId, prompt, params });
+            currentPromptIdRef.current = promptId;
+            activePromptIdRef.current = promptId;
+            lastPromptIdRef.current = promptId;
+            debugLog(
+                `sendPrompt assigned promptId=${promptId} activePromptId=${activePromptIdRef.current} lastPromptId=${lastPromptIdRef.current}`,
+            );
+            setCurrentPromptId(promptId);
 
-        // Construire le contenu d'affichage (avec noms des pièces jointes)
-        const imageAttachments = attachments?.filter((a) => a.dataUrl && a.mimeType.startsWith("image/")) ?? [];
-        const textAttachments = attachments?.filter((a) => a.text) ?? [];
-        const attachmentLabel = [...imageAttachments, ...textAttachments].map((a) => a.name).join(", ");
-        const displayPrompt = attachmentLabel ? `${prompt}${prompt ? "\n" : ""}📎 ${attachmentLabel}` : prompt;
+            // Construire le contenu d'affichage (avec noms des pièces jointes)
+            const imageAttachments = attachments?.filter((a) => a.dataUrl && a.mimeType.startsWith("image/")) ?? [];
+            const textAttachments = attachments?.filter((a) => a.text) ?? [];
+            const attachmentLabel = [...imageAttachments, ...textAttachments].map((a) => a.name).join(", ");
+            const displayPrompt = attachmentLabel ? `${prompt}${prompt ? "\n" : ""}📎 ${attachmentLabel}` : prompt;
 
-        if (!skipUserMessage) {
-            setMessages((current) => {
-                const next: LlamaMessage[] = [
-                    ...current,
-                    { role: "user", content: displayPrompt },
-                    { role: "assistant", content: "" },
-                ];
-                console.log("[useLlama] messages after sendPrompt", next);
-                return next;
-            });
-        } else {
-            // Marquer le message utilisateur comme définitif (supprimer displayOnly)
-            setMessages((current) => {
-                const next = [...current];
-                const userMsg = next[next.length - 2];
-                if (userMsg?.role === "user" && userMsg.displayOnly) {
-                    next[next.length - 2] = { ...userMsg, displayOnly: undefined };
-                }
-                return next;
-            });
-        }
-
-        // Pré-calculer le contenu API du message courant pour le stocker dans l'historique
-        // (fait ici pour être disponible avant la construction de textParts ci-dessous)
-        let pendingApiContent: LlamaApiContent | null = null; // sera assigné après la construction de newUserMsg
-
-        try {
-            const contextWindow = params?.contextWindow ?? 4096;
-            contextWindowRef.current = contextWindow;
-            // Mettre à jour la limite de tokens avec le contextWindow courant (toujours initialiser)
-            setTokenUsage((prev) => ({ used: prev?.used ?? 0, limit: contextWindow }));
-
-            // Construire l'historique complet des messages pour l'API
-            // Utiliser apiContent si disponible (contient le texte des documents joints)
-            const history = messagesRef.current
-                .filter(m => !m.displayOnly && (m.content.trim() !== "" || m.role === "user")) // exclure assistants vides et messages displayOnly
-                .map(m => ({ role: m.role, content: m.apiContent ?? m.content }));
-
-            // Ajouter le system prompt si présent
-            let systemMessage = params?.systemPrompt
-                ? [{ role: "system", content: params.systemPrompt }]
-                : [];
-
-            // Contenu texte pour l'API : fichiers texte avec séparateurs texte neutres
-            // (évite backticks qui cassent les .md, et balises XML qui bloquent certains modèles)
-            const textParts: string[] = [];
-            for (const ta of textAttachments) {
-                textParts.push(`===== FICHIER : ${ta.name} =====\n${ta.text}\n===== FIN DU FICHIER =====`);
-            }
-            textParts.push(prompt);
-            const apiText = textParts.join("\n\n");
-
-            // Contenu du nouveau message utilisateur (multimodal si images présentes)
-            const newUserMsgContent: LlamaApiContent = imageAttachments.length > 0
-                ? [
-                    { type: "text", text: apiText },
-                    ...imageAttachments.map(
-                        (a): LlamaApiImagePart => ({
-                            type: "image_url",
-                            image_url: { url: a.dataUrl as string },
-                        }),
-                    ),
-                ]
-                : apiText;
-
-            const newUserMsg = { role: "user", content: newUserMsgContent };
-            pendingApiContent = newUserMsgContent;
-
-            // --- Troncature automatique du contexte (C) ---
-            // Estimation multimodale : compte les images (base64) en plus du texte
-            const estimateTokens = (msgs: { role: string; content: LlamaApiContent }[]) =>
-                msgs.reduce((acc, m) => {
-                    if (typeof m.content === "string") {
-                        return acc + Math.ceil(m.content.length / 4) + 4;
-                    }
-                    if (Array.isArray(m.content)) {
-                        let t = 4;
-                        for (const part of m.content) {
-                            if (part.type === "text") t += Math.ceil((part.text?.length ?? 0) / 4);
-                            // base64 image_url : ~6 chars base64 = ~1 token (vision encoder),
-                            // + 256 tokens de base pour les embeddings patch
-                            if (part.type === "image_url") t += 256 + Math.ceil((part.image_url?.url?.length ?? 0) / 6);
-                        }
-                        return acc + t;
-                    }
-                    return acc + 4;
-                }, 0);
-
-            const TRUNCATION_THRESHOLD = 0.75; // 75% pour laisser de la marge aux images
-            const maxTokens = Math.floor(contextWindow * TRUNCATION_THRESHOLD);
-
-            // Construire la liste complète et tronquer si nécessaire
-            let trimmedHistory = [...history];
-            // Tronquer par paires user/assistant depuis le début (on garde les plus récents)
-            while (
-                estimateTokens([...systemMessage, ...trimmedHistory, newUserMsg]) > maxTokens &&
-                trimmedHistory.length > 0
-            ) {
-                // Retirer la paire la plus ancienne (user + assistant) depuis le début
-                const firstUserIdx = trimmedHistory.findIndex(m => m.role === "user");
-                if (firstUserIdx === -1) { trimmedHistory.shift(); continue; }
-                // Retirer user + éventuel assistant suivant
-                const removeCount = (trimmedHistory[firstUserIdx + 1]?.role === "assistant") ? 2 : 1;
-                trimmedHistory.splice(firstUserIdx, removeCount);
-            }
-            // Fallback : si même avec historique vide on dépasse (system prompt trop grand),
-            // tronquer le system prompt pour garder une marge de sécurité.
-            const hardLimit = Math.floor(contextWindow * 0.90);
-            if (systemMessage.length > 0) {
-                const baseTokens = estimateTokens([...systemMessage, newUserMsg]);
-                if (baseTokens > hardLimit) {
-                    const allowedSysChars = Math.max(500, (hardLimit - estimateTokens([newUserMsg]) - 8) * 4);
-                    const truncatedSys = systemMessage[0].content.slice(0, allowedSysChars) + "\n[contexte tronqué]";
-                    systemMessage[0] = { role: "system", content: truncatedSys };
-                }
-            }
-            // -------------------------------------------------
-
-            const apiMessages = [
-                ...systemMessage,
-                ...trimmedHistory,
-                newUserMsg,
-            ];
-
-            // Estimer les tokens envoyés et mettre à jour le badge immédiatement
-            const estimatedUsed = estimateTokens([
-                ...systemMessage,
-                ...trimmedHistory,
-                newUserMsg,
-            ]);
-            setTokenUsage({ used: estimatedUsed, limit: contextWindow });
-
-            // Stocker apiContent sur le message user pour que les échanges suivants
-            // puissent relire le contenu du document dans l'historique
-            if (pendingApiContent !== null) {
-                const apiContent = pendingApiContent;
+            if (!skipUserMessage) {
+                setMessages((current) => {
+                    const next: LlamaMessage[] = [
+                        ...current,
+                        { role: "user", content: displayPrompt },
+                        { role: "assistant", content: "" },
+                    ];
+                    console.log("[useLlama] messages after sendPrompt", next);
+                    return next;
+                });
+            } else {
+                // Marquer le message utilisateur comme définitif (supprimer displayOnly)
                 setMessages((current) => {
                     const next = [...current];
-                    // Le message user ajouté est à l'avant-dernière position (avant l'assistant vide)
-                    const userIdx = next.length - 2;
-                    if (userIdx >= 0 && next[userIdx]?.role === "user") {
-                        next[userIdx] = { ...next[userIdx], apiContent };
+                    const userMsg = next[next.length - 2];
+                    if (userMsg?.role === "user" && userMsg.displayOnly) {
+                        next[next.length - 2] = { ...userMsg, displayOnly: undefined };
                     }
                     return next;
                 });
             }
 
-            const temperature = params?.temperature ?? 0.9;
+            // Pré-calculer le contenu API du message courant pour le stocker dans l'historique
+            // (fait ici pour être disponible avant la construction de textParts ci-dessous)
+            let pendingApiContent: LlamaApiContent | null = null; // sera assigné après la construction de newUserMsg
 
-            // Limiter la génération : laisser de la place pour la réponse
-            // (contextWindow - tokens du prompt estimés), plafond à 8192 par défaut
-            const availableForResponse = Math.max(256, contextWindow - estimatedUsed);
-            const maxResponseTokens = Math.min(
-                availableForResponse,
-                contextWindow > 32768 ? 16384 : 8192
-            );
+            try {
+                const contextWindow = params?.contextWindow ?? 4096;
+                contextWindowRef.current = contextWindow;
+                // Mettre à jour la limite de tokens avec le contextWindow courant (toujours initialiser)
+                setTokenUsage((prev) => ({ used: prev?.used ?? 0, limit: contextWindow }));
 
-            const sampling = params?.sampling ?? {};
+                // Construire l'historique complet des messages pour l'API
+                // Utiliser apiContent si disponible (contient le texte des documents joints)
+                const history = messagesRef.current
+                    .filter((m) => !m.displayOnly && (m.content.trim() !== "" || m.role === "user")) // exclure assistants vides et messages displayOnly
+                    .map((m) => ({ role: m.role, content: m.apiContent ?? m.content }));
 
-            const response = await safeInvoke<{ done: boolean }>("send_llama_prompt", {
-                messages: apiMessages,
-                promptId,
-                temperature,
-                maxTokens: maxResponseTokens,
-                sampling,
-                thinkingEnabled: params?.thinkingEnabled ?? true,
-            });
-            console.log("[useLlama] sendPrompt response", response);
-            return response;
-        } catch (e: unknown) {
-            console.error("[useLlama] sendPrompt error", e);
-            setError(getErrorMessage(e, "Erreur lors de l'envoi du prompt"));
-            setStreaming(false);
-            setCurrentPromptId(null);
-            throw e;
-        }
-    }, [debugLog]);
+                // Ajouter le system prompt si présent
+                let systemMessage = params?.systemPrompt ? [{ role: "system", content: params.systemPrompt }] : [];
+
+                // Contenu texte pour l'API : fichiers texte avec séparateurs texte neutres
+                // (évite backticks qui cassent les .md, et balises XML qui bloquent certains modèles)
+                const textParts: string[] = [];
+                for (const ta of textAttachments) {
+                    textParts.push(`===== FICHIER : ${ta.name} =====\n${ta.text}\n===== FIN DU FICHIER =====`);
+                }
+                textParts.push(prompt);
+                const apiText = textParts.join("\n\n");
+
+                // Contenu du nouveau message utilisateur (multimodal si images présentes)
+                const newUserMsgContent: LlamaApiContent =
+                    imageAttachments.length > 0
+                        ? [
+                              { type: "text", text: apiText },
+                              ...imageAttachments.map(
+                                  (a): LlamaApiImagePart => ({
+                                      type: "image_url",
+                                      image_url: { url: a.dataUrl as string },
+                                  }),
+                              ),
+                          ]
+                        : apiText;
+
+                const newUserMsg = { role: "user", content: newUserMsgContent };
+                pendingApiContent = newUserMsgContent;
+
+                // --- Troncature automatique du contexte (C) ---
+                // Estimation multimodale : compte les images (base64) en plus du texte
+                const estimateTokens = (msgs: { role: string; content: LlamaApiContent }[]) =>
+                    msgs.reduce((acc, m) => {
+                        if (typeof m.content === "string") {
+                            return acc + Math.ceil(m.content.length / 4) + 4;
+                        }
+                        if (Array.isArray(m.content)) {
+                            let t = 4;
+                            for (const part of m.content) {
+                                if (part.type === "text") t += Math.ceil((part.text?.length ?? 0) / 4);
+                                // base64 image_url : ~6 chars base64 = ~1 token (vision encoder),
+                                // + 256 tokens de base pour les embeddings patch
+                                if (part.type === "image_url")
+                                    t += 256 + Math.ceil((part.image_url?.url?.length ?? 0) / 6);
+                            }
+                            return acc + t;
+                        }
+                        return acc + 4;
+                    }, 0);
+
+                const TRUNCATION_THRESHOLD = 0.75; // 75% pour laisser de la marge aux images
+                const maxTokens = Math.floor(contextWindow * TRUNCATION_THRESHOLD);
+
+                // Construire la liste complète et tronquer si nécessaire
+                let trimmedHistory = [...history];
+                // Tronquer par paires user/assistant depuis le début (on garde les plus récents)
+                while (
+                    estimateTokens([...systemMessage, ...trimmedHistory, newUserMsg]) > maxTokens &&
+                    trimmedHistory.length > 0
+                ) {
+                    // Retirer la paire la plus ancienne (user + assistant) depuis le début
+                    const firstUserIdx = trimmedHistory.findIndex((m) => m.role === "user");
+                    if (firstUserIdx === -1) {
+                        trimmedHistory.shift();
+                        continue;
+                    }
+                    // Retirer user + éventuel assistant suivant
+                    const removeCount = trimmedHistory[firstUserIdx + 1]?.role === "assistant" ? 2 : 1;
+                    trimmedHistory.splice(firstUserIdx, removeCount);
+                }
+                // Fallback : si même avec historique vide on dépasse (system prompt trop grand),
+                // tronquer le system prompt pour garder une marge de sécurité.
+                const hardLimit = Math.floor(contextWindow * 0.9);
+                if (systemMessage.length > 0) {
+                    const baseTokens = estimateTokens([...systemMessage, newUserMsg]);
+                    if (baseTokens > hardLimit) {
+                        const allowedSysChars = Math.max(500, (hardLimit - estimateTokens([newUserMsg]) - 8) * 4);
+                        const truncatedSys =
+                            systemMessage[0].content.slice(0, allowedSysChars) + "\n[contexte tronqué]";
+                        systemMessage[0] = { role: "system", content: truncatedSys };
+                    }
+                }
+                // -------------------------------------------------
+
+                const apiMessages = [...systemMessage, ...trimmedHistory, newUserMsg];
+
+                // Estimer les tokens envoyés et mettre à jour le badge immédiatement
+                const estimatedUsed = estimateTokens([...systemMessage, ...trimmedHistory, newUserMsg]);
+                setTokenUsage({ used: estimatedUsed, limit: contextWindow });
+
+                // Stocker apiContent sur le message user pour que les échanges suivants
+                // puissent relire le contenu du document dans l'historique
+                if (pendingApiContent !== null) {
+                    const apiContent = pendingApiContent;
+                    setMessages((current) => {
+                        const next = [...current];
+                        // Le message user ajouté est à l'avant-dernière position (avant l'assistant vide)
+                        const userIdx = next.length - 2;
+                        if (userIdx >= 0 && next[userIdx]?.role === "user") {
+                            next[userIdx] = { ...next[userIdx], apiContent };
+                        }
+                        return next;
+                    });
+                }
+
+                const temperature = params?.temperature ?? 0.9;
+
+                // Limiter la génération : laisser de la place pour la réponse
+                // (contextWindow - tokens du prompt estimés), plafond à 8192 par défaut
+                const availableForResponse = Math.max(256, contextWindow - estimatedUsed);
+                const maxResponseTokens = Math.min(availableForResponse, contextWindow > 32768 ? 16384 : 8192);
+
+                const sampling = params?.sampling ?? {};
+
+                const response = await safeInvoke<{ done: boolean }>("send_llama_prompt", {
+                    messages: apiMessages,
+                    promptId,
+                    temperature,
+                    maxTokens: maxResponseTokens,
+                    sampling,
+                    thinkingEnabled: params?.thinkingEnabled ?? true,
+                });
+                console.log("[useLlama] sendPrompt response", response);
+                return response;
+            } catch (e: unknown) {
+                console.error("[useLlama] sendPrompt error", e);
+                setError(getErrorMessage(e, "Erreur lors de l'envoi du prompt"));
+                setStreaming(false);
+                setCurrentPromptId(null);
+                throw e;
+            }
+        },
+        [debugLog],
+    );
 
     const deleteMessage = useCallback((index: number) => {
         setMessages((current) => {
             const next = [...current];
             // If the next message is from the assistant, delete it too
-            const deleteCount =
-                next[index + 1]?.role === "assistant" ? 2 : 1;
+            const deleteCount = next[index + 1]?.role === "assistant" ? 2 : 1;
             next.splice(index, deleteCount);
             return next;
         });
@@ -750,11 +835,7 @@ export function useLlama() {
     }, []);
 
     const editMessage = useCallback((index: number, newContent: string) => {
-        setMessages((current) =>
-            current.map((msg, i) =>
-                i === index ? { ...msg, content: newContent } : msg
-            )
-        );
+        setMessages((current) => current.map((msg, i) => (i === index ? { ...msg, content: newContent } : msg)));
     }, []);
 
     /** Annule la génération en cours sans décharger llama.cpp.
@@ -798,6 +879,13 @@ export function useLlama() {
         });
     }, []);
 
+    /** Insère un message dans le chat sans déclencher de génération LLM.
+     *  Utile pour afficher des résultats d'outils (images, fichiers…) visibles
+     *  dans l'UI mais exclus de l'historique API si displayOnly=true. */
+    const insertMessage = useCallback((msg: LlamaMessage) => {
+        setMessages((current) => [...current, msg]);
+    }, []);
+
     return {
         messages,
         loading,
@@ -815,7 +903,8 @@ export function useLlama() {
         truncateMessagesFrom,
         resetMessages,
         updateLastAssistantContent,
+        insertMessage,
     };
 }
-    const getErrorMessage = (error: unknown, fallback: string) =>
-        typeof error === "string" ? error : error instanceof Error ? error.message : JSON.stringify(error) ?? fallback;
+const getErrorMessage = (error: unknown, fallback: string) =>
+    typeof error === "string" ? error : error instanceof Error ? error.message : (JSON.stringify(error) ?? fallback);

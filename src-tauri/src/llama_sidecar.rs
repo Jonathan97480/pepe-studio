@@ -1,18 +1,24 @@
 //! Wrapper Rust pour lancer llama-server et communiquer via HTTP/SSE avec le frontend Tauri
 
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle, Manager, State};
 
 pub struct LlamaState {
     child: Mutex<Option<Child>>,
     port: Mutex<Option<u16>>,
+    pub n_gpu_layers: Mutex<i32>,
+    /// Derniers paramètres de lancement (pour relancer après génération SD)
+    pub last_binary: Mutex<Option<PathBuf>>,
+    pub last_server_dir: Mutex<Option<PathBuf>>,
+    pub last_model_resolved: Mutex<Option<String>>,
+    pub last_params: Mutex<Option<Vec<String>>>,
 }
 
 impl Default for LlamaState {
@@ -20,14 +26,49 @@ impl Default for LlamaState {
         Self {
             child: Mutex::new(None),
             port: Mutex::new(None),
+            n_gpu_layers: Mutex::new(0),
+            last_binary: Mutex::new(None),
+            last_server_dir: Mutex::new(None),
+            last_model_resolved: Mutex::new(None),
+            last_params: Mutex::new(None),
         }
+    }
+}
+
+impl LlamaState {
+    /// Arrête le processus enfant et réinitialise le port (thread-safe, sync).
+    pub fn stop_sync(&self) {
+        *self.port.lock().unwrap() = None;
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    /// Met à jour le child et le port après un spawn externe (thread-safe).
+    pub fn set_child_and_port(&self, child: std::process::Child, port: u16) {
+        *self.child.lock().unwrap() = Some(child);
+        // Le port sera mis à jour une fois le serveur prêt (via set_port)
+        let _ = port; // ignoré intentionnellement ici
+    }
+
+    /// Marque le serveur comme disponible sur un port donné.
+    pub fn set_port(&self, port: u16) {
+        *self.port.lock().unwrap() = Some(port);
+    }
+
+    /// Retourne true si llama-server tourne ET utilise le GPU (n_gpu_layers > 0)
+    pub fn is_gpu_active(&self) -> bool {
+        let port_active = self.port.lock().unwrap().is_some();
+        let layers = *self.n_gpu_layers.lock().unwrap();
+        port_active && layers != 0
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: serde_json::Value,  // String ou tableau [{type,text},{type,image_url}] pour le multimodal
+    pub content: serde_json::Value, // String ou tableau [{type,text},{type,image_url}] pour le multimodal
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -102,9 +143,14 @@ fn resolve_model_path(app: &AppHandle, model_path: &str) -> Result<PathBuf, Stri
     candidates.push(cwd.join("models").join(file_name));
 
     for candidate in &candidates {
-        println!("[llama_sidecar] checking model candidate: {}", candidate.display());
+        println!(
+            "[llama_sidecar] checking model candidate: {}",
+            candidate.display()
+        );
         if candidate.exists() {
-            return Ok(candidate.canonicalize().unwrap_or_else(|_| candidate.clone()));
+            return Ok(candidate
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.clone()));
         }
     }
 
@@ -153,15 +199,24 @@ fn resolve_llama_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
     candidates.push(cwd.join("../llama.cpp/llama-server"));
 
     for candidate in &candidates {
-        println!("[llama_sidecar] checking server binary: {}", candidate.display());
+        println!(
+            "[llama_sidecar] checking server binary: {}",
+            candidate.display()
+        );
         if candidate.exists() {
-            return Ok(candidate.canonicalize().unwrap_or_else(|_| candidate.clone()));
+            return Ok(candidate
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.clone()));
         }
     }
 
     Err(format!(
         "Le binaire llama-server est introuvable. Recherché dans: {}",
-        candidates.iter().map(|c| c.display().to_string()).collect::<Vec<_>>().join(", ")
+        candidates
+            .iter()
+            .map(|c| c.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     ))
 }
 
@@ -215,7 +270,10 @@ pub async fn start_llama(
     state: State<'_, LlamaState>,
     app: AppHandle,
 ) -> Result<String, String> {
-    println!("[llama_sidecar] start_llama called with model_path={}", model_path);
+    println!(
+        "[llama_sidecar] start_llama called with model_path={}",
+        model_path
+    );
 
     // Tuer TOUTES les instances llama-server existantes (évite les processus fantômes)
     #[cfg(target_os = "windows")]
@@ -248,11 +306,43 @@ pub async fn start_llama(
         let _ = child.wait();
     }
 
+    // Extraire le nombre de couches GPU depuis les params (-ngl / --n-gpu-layers)
+    {
+        let mut ngl: i32 = 0;
+        let params_vec: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
+        let ngl_keys = ["-ngl", "--n-gpu-layers", "--gpu-layers"];
+        for i in 0..params_vec.len() {
+            if ngl_keys.contains(&params_vec[i]) {
+                if let Some(val) = params_vec.get(i + 1) {
+                    ngl = val.parse().unwrap_or(0);
+                }
+            }
+            // Forme "--n-gpu-layers=N"
+            for key in &ngl_keys {
+                if params_vec[i].starts_with(&format!("{}=", key)) {
+                    let val = params_vec[i].splitn(2, '=').nth(1).unwrap_or("0");
+                    ngl = val.parse().unwrap_or(0);
+                }
+            }
+        }
+        *state.n_gpu_layers.lock().unwrap() = ngl;
+        println!("[llama_sidecar] n_gpu_layers stocké : {}", ngl);
+    }
+
     let resolved = resolve_model_path(&app, &model_path)?;
     let resolved_str = resolved.to_string_lossy().to_string();
     let server_binary = resolve_llama_server_binary(&app)?;
     // Répertoire du binaire pour que Windows trouve les DLLs (ggml-base.dll, llama.dll, etc.)
-    let server_dir = server_binary.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+    let server_dir = server_binary
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+
+    // Mémoriser les paramètres pour pouvoir relancer après génération SD
+    *state.last_binary.lock().unwrap() = Some(server_binary.clone());
+    *state.last_server_dir.lock().unwrap() = Some(server_dir.clone());
+    *state.last_model_resolved.lock().unwrap() = Some(resolved_str.clone());
+    *state.last_params.lock().unwrap() = Some(params.clone());
     let (stdout_log_path, stderr_log_path) = llama_log_paths(&app);
     let _ = fs::write(&stdout_log_path, "");
     let _ = fs::write(&stderr_log_path, "");
@@ -263,11 +353,14 @@ pub async fn start_llama(
 
     let mut command = Command::new(&server_binary);
     command
-        .arg("-m").arg(&resolved_str)
-        .arg("--host").arg("127.0.0.1")
-        .arg("--port").arg(SERVER_PORT.to_string())
+        .arg("-m")
+        .arg(&resolved_str)
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(SERVER_PORT.to_string())
         .args(&params)
-        .current_dir(&server_dir)  // Garantit que les DLLs adjacentes (ggml-base.dll, etc.) sont trouvées
+        .current_dir(&server_dir) // Garantit que les DLLs adjacentes (ggml-base.dll, etc.) sont trouvées
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(stderr_log))
         .stdin(Stdio::null());
@@ -347,6 +440,11 @@ pub fn get_llama_logs(app: AppHandle) -> Result<LlamaLogs, String> {
     })
 }
 
+/// Retourne true si llama-server est en cours d'exécution (port actif).
+#[command]
+pub fn is_llama_running(state: State<'_, LlamaState>) -> bool {
+    state.port.lock().unwrap().is_some()
+}
 
 /// Arrête le serveur llama à la fermeture de l’app.
 pub fn cleanup_llama(state: &LlamaState) {
@@ -405,8 +503,9 @@ pub async fn send_llama_prompt(
     thinking_enabled: Option<bool>,
     state: State<'_, LlamaState>,
 ) -> Result<serde_json::Value, String> {
-    let port = state.port.lock().unwrap()
-        .ok_or_else(|| "Aucun serveur llama démarré. Veuillez charger le modèle d'abord.".to_string())?;
+    let port = state.port.lock().unwrap().ok_or_else(|| {
+        "Aucun serveur llama démarré. Veuillez charger le modèle d'abord.".to_string()
+    })?;
 
     let url = format!("http://127.0.0.1:{}/v1/chat/completions", port);
 
@@ -433,30 +532,67 @@ pub async fn send_llama_prompt(
     // Conditionally add optional llama.cpp params
     let obj = body.as_object_mut().unwrap();
 
-    if let Some(v) = s.penalty_last_n { obj.insert("penalty_last_n".into(), serde_json::json!(v)); }
-    if let Some(v) = s.mirostat { if v > 0 { obj.insert("mirostat".into(), serde_json::json!(v)); } }
-    if let Some(v) = s.mirostat_tau { obj.insert("mirostat_tau".into(), serde_json::json!(v)); }
-    if let Some(v) = s.mirostat_eta { obj.insert("mirostat_eta".into(), serde_json::json!(v)); }
-    if let Some(v) = s.dyna_temp_range { if v > 0.0 { obj.insert("dynatemp_range".into(), serde_json::json!(v)); } }
-    if let Some(v) = s.dyna_temp_exponent { obj.insert("dynatemp_exponent".into(), serde_json::json!(v)); }
-    if let Some(v) = s.xtc_probability { if v > 0.0 { obj.insert("xtc_probability".into(), serde_json::json!(v)); } }
-    if let Some(v) = s.xtc_threshold { obj.insert("xtc_threshold".into(), serde_json::json!(v)); }
-    if let Some(v) = s.top_n_sigma { if v >= 0.0 { obj.insert("top_n_sigma".into(), serde_json::json!(v)); } }
-    if let Some(v) = s.dry_multiplier { if v > 0.0 {
-        obj.insert("dry_multiplier".into(), serde_json::json!(v));
-        obj.insert("dry_base".into(), serde_json::json!(s.dry_base.unwrap_or(1.75)));
-        obj.insert("dry_allowed_length".into(), serde_json::json!(s.dry_allowed_length.unwrap_or(2)));
-        if let Some(pln) = s.dry_penalty_last_n { obj.insert("dry_penalty_last_n".into(), serde_json::json!(pln)); }
-        if let Some(ref breakers) = s.dry_sequence_breakers {
-            let parsed: Vec<String> = breakers.split(',')
-                .map(|b| b.trim().trim_matches('"').to_string())
-                .filter(|b| !b.is_empty())
-                .collect();
-            if !parsed.is_empty() {
-                obj.insert("dry_sequence_breakers".into(), serde_json::json!(parsed));
+    if let Some(v) = s.penalty_last_n {
+        obj.insert("penalty_last_n".into(), serde_json::json!(v));
+    }
+    if let Some(v) = s.mirostat {
+        if v > 0 {
+            obj.insert("mirostat".into(), serde_json::json!(v));
+        }
+    }
+    if let Some(v) = s.mirostat_tau {
+        obj.insert("mirostat_tau".into(), serde_json::json!(v));
+    }
+    if let Some(v) = s.mirostat_eta {
+        obj.insert("mirostat_eta".into(), serde_json::json!(v));
+    }
+    if let Some(v) = s.dyna_temp_range {
+        if v > 0.0 {
+            obj.insert("dynatemp_range".into(), serde_json::json!(v));
+        }
+    }
+    if let Some(v) = s.dyna_temp_exponent {
+        obj.insert("dynatemp_exponent".into(), serde_json::json!(v));
+    }
+    if let Some(v) = s.xtc_probability {
+        if v > 0.0 {
+            obj.insert("xtc_probability".into(), serde_json::json!(v));
+        }
+    }
+    if let Some(v) = s.xtc_threshold {
+        obj.insert("xtc_threshold".into(), serde_json::json!(v));
+    }
+    if let Some(v) = s.top_n_sigma {
+        if v >= 0.0 {
+            obj.insert("top_n_sigma".into(), serde_json::json!(v));
+        }
+    }
+    if let Some(v) = s.dry_multiplier {
+        if v > 0.0 {
+            obj.insert("dry_multiplier".into(), serde_json::json!(v));
+            obj.insert(
+                "dry_base".into(),
+                serde_json::json!(s.dry_base.unwrap_or(1.75)),
+            );
+            obj.insert(
+                "dry_allowed_length".into(),
+                serde_json::json!(s.dry_allowed_length.unwrap_or(2)),
+            );
+            if let Some(pln) = s.dry_penalty_last_n {
+                obj.insert("dry_penalty_last_n".into(), serde_json::json!(pln));
+            }
+            if let Some(ref breakers) = s.dry_sequence_breakers {
+                let parsed: Vec<String> = breakers
+                    .split(',')
+                    .map(|b| b.trim().trim_matches('"').to_string())
+                    .filter(|b| !b.is_empty())
+                    .collect();
+                if !parsed.is_empty() {
+                    obj.insert("dry_sequence_breakers".into(), serde_json::json!(parsed));
+                }
             }
         }
-    }}
+    }
 
     // Thinking: enabled by default (llama.cpp uses "think" field)
     if thinking_enabled == Some(false) {
@@ -474,7 +610,11 @@ pub async fn send_llama_prompt(
         .map_err(|e| format!("Erreur requête llama-server: {}", e))?;
 
     if !resp.status().is_success() {
-        return Err(format!("Erreur serveur llama ({}): {}", resp.status(), resp.text().await.unwrap_or_default()));
+        return Err(format!(
+            "Erreur serveur llama ({}): {}",
+            resp.status(),
+            resp.text().await.unwrap_or_default()
+        ));
     }
 
     let mut stream = resp.bytes_stream();
@@ -485,10 +625,13 @@ pub async fn send_llama_prompt(
             Ok(c) => c,
             Err(e) => {
                 let err_msg = format!("Connexion interrompue avec le serveur llama: {}", e);
-                let _ = app.emit_all("llama-error", serde_json::json!({
-                    "prompt_id": prompt_id,
-                    "error": err_msg,
-                }));
+                let _ = app.emit_all(
+                    "llama-error",
+                    serde_json::json!({
+                        "prompt_id": prompt_id,
+                        "error": err_msg,
+                    }),
+                );
                 return Err(err_msg);
             }
         };
@@ -510,32 +653,43 @@ pub async fn send_llama_prompt(
                     let data = &line[6..];
 
                     if data == "[DONE]" {
-                        let _ = app.emit_all("llama-done", serde_json::json!({
-                            "prompt_id": prompt_id,
-                            "done": true,
-                        }));
+                        let _ = app.emit_all(
+                            "llama-done",
+                            serde_json::json!({
+                                "prompt_id": prompt_id,
+                                "done": true,
+                            }),
+                        );
                         return Ok(serde_json::json!({ "done": true }));
                     }
 
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
                         // Contenu de réflexion (thinking models: deepseek, gemma thinking, etc.)
-                        if let Some(thinking) = parsed["choices"][0]["delta"]["reasoning_content"].as_str() {
+                        if let Some(thinking) =
+                            parsed["choices"][0]["delta"]["reasoning_content"].as_str()
+                        {
                             if !thinking.is_empty() {
-                                let _ = app.emit_all("llama-stream", serde_json::json!({
-                                    "prompt_id": prompt_id,
-                                    "chunk": thinking,
-                                    "is_thinking": true,
-                                }));
+                                let _ = app.emit_all(
+                                    "llama-stream",
+                                    serde_json::json!({
+                                        "prompt_id": prompt_id,
+                                        "chunk": thinking,
+                                        "is_thinking": true,
+                                    }),
+                                );
                             }
                         }
                         // Contenu normal
                         if let Some(content) = parsed["choices"][0]["delta"]["content"].as_str() {
                             if !content.is_empty() {
-                                let _ = app.emit_all("llama-stream", serde_json::json!({
-                                    "prompt_id": prompt_id,
-                                    "chunk": content,
-                                    "is_thinking": false,
-                                }));
+                                let _ = app.emit_all(
+                                    "llama-stream",
+                                    serde_json::json!({
+                                        "prompt_id": prompt_id,
+                                        "chunk": content,
+                                        "is_thinking": false,
+                                    }),
+                                );
                             }
                         }
                         if parsed["choices"][0]["finish_reason"].as_str() == Some("stop") {
@@ -546,8 +700,13 @@ pub async fn send_llama_prompt(
                                     let gen_tps = timings["predicted_per_second"].as_f64();
                                     let prompt_tps = timings["prompt_per_second"].as_f64();
                                     match (prompt_tps, gen_tps) {
-                                        (Some(p), Some(g)) => Some(format!("Prompt: {:.1} t/s | Génération: {:.1} t/s", p, g)),
-                                        (None, Some(g)) => Some(format!("Génération: {:.1} t/s", g)),
+                                        (Some(p), Some(g)) => Some(format!(
+                                            "Prompt: {:.1} t/s | Génération: {:.1} t/s",
+                                            p, g
+                                        )),
+                                        (None, Some(g)) => {
+                                            Some(format!("Génération: {:.1} t/s", g))
+                                        }
                                         _ => None,
                                     }
                                 } else {
@@ -556,22 +715,30 @@ pub async fn send_llama_prompt(
                             };
                             // Extraire l'usage des tokens (prompt_tokens) si présent
                             let prompt_tokens = parsed["usage"]["prompt_tokens"].as_u64();
-                            let _ = app.emit_all("llama-done", serde_json::json!({
-                                "prompt_id": prompt_id,
-                                "done": true,
-                                "meta": meta,
-                                "prompt_tokens": prompt_tokens,
-                            }));
+                            let _ = app.emit_all(
+                                "llama-done",
+                                serde_json::json!({
+                                    "prompt_id": prompt_id,
+                                    "done": true,
+                                    "meta": meta,
+                                    "prompt_tokens": prompt_tokens,
+                                }),
+                            );
                             return Ok(serde_json::json!({ "done": true }));
                         }
                         // Certaines versions de llama-server envoient usage dans un chunk séparé
                         // sans finish_reason → on stocke pour l'émettre au prochain llama-done
-                        if parsed["usage"].is_object() && parsed["choices"].as_array().map_or(true, |c| c.is_empty()) {
+                        if parsed["usage"].is_object()
+                            && parsed["choices"].as_array().map_or(true, |c| c.is_empty())
+                        {
                             let prompt_tokens = parsed["usage"]["prompt_tokens"].as_u64();
-                            let _ = app.emit_all("llama-usage", serde_json::json!({
-                                "prompt_id": prompt_id,
-                                "prompt_tokens": prompt_tokens,
-                            }));
+                            let _ = app.emit_all(
+                                "llama-usage",
+                                serde_json::json!({
+                                    "prompt_id": prompt_id,
+                                    "prompt_tokens": prompt_tokens,
+                                }),
+                            );
                         }
                     }
                 }
@@ -589,11 +756,14 @@ pub async fn send_llama_prompt(
     match health_client.get(&health_url).send().await {
         Ok(r) if r.status().is_success() => {
             // Serveur toujours vivant — génération terminée normalement
-            let _ = app.emit_all("llama-done", serde_json::json!({
-                "prompt_id": prompt_id,
-                "done": true,
-                "meta": null,
-            }));
+            let _ = app.emit_all(
+                "llama-done",
+                serde_json::json!({
+                    "prompt_id": prompt_id,
+                    "done": true,
+                    "meta": null,
+                }),
+            );
         }
         _ => {
             // Serveur mort — crash probable (OOM, SIGSEGV, modèle incompatible)
@@ -605,5 +775,3 @@ pub async fn send_llama_prompt(
     }
     Ok(serde_json::json!({ "done": true }))
 }
-
-

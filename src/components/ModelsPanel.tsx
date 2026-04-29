@@ -126,6 +126,8 @@ export default function ModelsPanel() {
         setIsModelLoaded,
         loadedModelPath,
         setLoadedModelPath,
+        sdModelPath,
+        setSdModelPath,
         setModelPath,
         setTemperature,
         setContextWindow,
@@ -152,6 +154,29 @@ export default function ModelsPanel() {
 
     const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
     const [modelMetadataMap, setModelMetadataMap] = useState<Record<string, ModelMetadata>>({});
+    const [sdModelFiles, setSdModelFiles] = useState<string[]>([]);
+
+    const refreshSdModels = useCallback(async () => {
+        try {
+            const models = await invoke<string[]>("list_sd_models");
+            setSdModelFiles(models);
+            if (sdModelPath && models.includes(sdModelPath)) {
+                return;
+            }
+            if (models.length === 1) {
+                setSdModelPath(models[0]);
+            } else {
+                setSdModelPath(null);
+            }
+        } catch {
+            setSdModelFiles([]);
+            setSdModelPath(null);
+        }
+    }, [sdModelPath, setSdModelPath]);
+
+    const handleRefreshAll = useCallback(async () => {
+        await Promise.all([refresh(), refreshSdModels()]);
+    }, [refresh, refreshSdModels]);
 
     const getOrCreateDraft = useCallback(
         (path: string): ModelConfig => drafts[path] ?? getConfigForPath(path),
@@ -337,6 +362,10 @@ export default function ModelsPanel() {
     }, []);
 
     useEffect(() => {
+        refreshSdModels();
+    }, [refreshSdModels]);
+
+    useEffect(() => {
         if (!expandedPath || modelMetadataMap[expandedPath]) return;
         let cancelled = false;
         inspectModelMetadata(expandedPath)
@@ -373,7 +402,7 @@ export default function ModelsPanel() {
                         <h2 className="text-2xl font-semibold text-white">Modèles locaux</h2>
                     </div>
                     <button
-                        onClick={refresh}
+                        onClick={handleRefreshAll}
                         className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/10"
                     >
                         🔄 Actualiser
@@ -398,6 +427,42 @@ export default function ModelsPanel() {
                     </div>
                 )}
 
+                <div className="mx-auto mb-4 max-w-3xl rounded-3xl border border-cyan-500/20 bg-cyan-500/5 p-5 shadow-xl shadow-slate-950/10">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                            <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">Générateur d'image</p>
+                            <h3 className="text-base font-semibold text-white">Stable Diffusion</h3>
+                        </div>
+                        <button
+                            onClick={refreshSdModels}
+                            className="rounded-2xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/10"
+                        >
+                            Rafraîchir SD
+                        </button>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                        <label className="text-xs text-slate-300">Modèle SD utilisé pour generate_image</label>
+                        <select
+                            value={sdModelPath ?? ""}
+                            onChange={(e) => setSdModelPath(e.target.value || null)}
+                            className="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
+                        >
+                            <option value="">Auto (détection automatique)</option>
+                            {sdModelFiles.map((path) => (
+                                <option key={path} value={path}>
+                                    {path.split(/[/\\]/).pop()}
+                                </option>
+                            ))}
+                        </select>
+                        <p className="text-[0.65rem] text-slate-500">
+                            {sdModelFiles.length > 0
+                                ? `${sdModelFiles.length} modèle(s) SD détecté(s). Si un seul est présent, il est utilisé par défaut.`
+                                : "Aucun modèle SD détecté. Place un .safetensors ou .ckpt dans models/sd/ puis clique sur Rafraîchir SD."}
+                        </p>
+                    </div>
+                </div>
+
                 {modelFiles.length === 0 ? (
                     <div className="flex flex-col items-center justify-center gap-4 pt-20 text-center text-slate-400">
                         <span className="text-5xl">📂</span>
@@ -407,7 +472,7 @@ export default function ModelsPanel() {
                             dossier <code className="rounded bg-white/10 px-2 py-0.5">models/</code>
                         </p>
                         <button
-                            onClick={refresh}
+                            onClick={handleRefreshAll}
                             className="mt-2 rounded-2xl bg-blue-500 px-6 py-2 text-sm font-medium text-white transition hover:bg-blue-400"
                         >
                             Rafraîchir

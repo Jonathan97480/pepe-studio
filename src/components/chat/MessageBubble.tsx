@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { invoke } from "@tauri-apps/api/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -13,6 +14,7 @@ import type { LlamaMessage } from "../../hooks/useLlama";
 interface MessageBubbleProps {
     message: LlamaMessage;
     index: number;
+    conversationId?: number | null;
     expandedThinking: Record<number, boolean>;
     toggleThinking: (index: number) => void;
     expandedToolCalls: Record<string, boolean>;
@@ -29,6 +31,7 @@ interface MessageBubbleProps {
 export function MessageBubble({
     message,
     index,
+    conversationId,
     expandedThinking,
     toggleThinking,
     expandedToolCalls,
@@ -41,12 +44,125 @@ export function MessageBubble({
     handleResendEdit,
     deleteMessage,
 }: MessageBubbleProps) {
+    const [lightboxOpen, setLightboxOpen] = React.useState(false);
+    const [isSavingImage, setIsSavingImage] = React.useState(false);
+    const [isDeletingImage, setIsDeletingImage] = React.useState(false);
+    const [saveStatus, setSaveStatus] = React.useState<string | null>(null);
     const bubbleClass =
         message.role === "assistant" ? "self-start bg-white/10 text-slate-100" : "self-end bg-blue-500/90 text-white";
     const hasThinking = !!message.thinking;
     const isExpanded = expandedThinking[index] ?? false;
     const displayContent = message.content || (hasThinking && !message.thinkingDone ? "..." : message.content);
     const isEditing = editingIndex === index;
+
+    async function handleSaveImageAs() {
+        if (!message.imageDataUrl || isSavingImage) return;
+        setIsSavingImage(true);
+        setSaveStatus(null);
+        try {
+            const result = await invoke<{ path: string; filename: string }>("save_image_as", {
+                dataUrl: message.imageDataUrl,
+                filename: null,
+            });
+            setSaveStatus(`Enregistrée : ${result.path}`);
+        } catch (error) {
+            setSaveStatus(`Erreur sauvegarde : ${String(error)}`);
+        } finally {
+            setIsSavingImage(false);
+        }
+    }
+
+    async function handleDeleteImage() {
+        if (isDeletingImage) return;
+        const confirmed = window.confirm("Supprimer cette image du chat ?");
+        if (!confirmed) return;
+
+        setIsDeletingImage(true);
+        try {
+            if (message.imagePath) {
+                await invoke<string>("delete_generated_image", { path: message.imagePath });
+                if (conversationId) {
+                    await invoke("delete_image_message", {
+                        conversationId,
+                        imagePath: message.imagePath,
+                    });
+                }
+            }
+            deleteMessage(index);
+        } catch (error) {
+            setSaveStatus(`Erreur suppression : ${String(error)}`);
+        } finally {
+            setIsDeletingImage(false);
+        }
+    }
+
+    // ── Image générée (rendu natif, évite les problèmes ReactMarkdown/CSP) ──
+    if (message.imageDataUrl) {
+        return (
+            <div key={index} className="flex flex-col gap-1 self-start max-w-[80%]">
+                <div className="rounded-3xl overflow-hidden border border-white/10 bg-white/5 shadow-xl shadow-slate-950/20">
+                    {message.content && (
+                        <p className="px-4 pt-3 pb-2 text-sm font-semibold text-slate-300">{message.content}</p>
+                    )}
+                    <img
+                        src={message.imageDataUrl}
+                        alt="image générée"
+                        className="max-w-full rounded-b-3xl block cursor-zoom-in"
+                        style={{ maxHeight: "512px", objectFit: "contain" }}
+                        onClick={() => setLightboxOpen(true)}
+                    />
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setLightboxOpen(true)}
+                        className="rounded-xl border border-cyan-500/30 bg-cyan-900/20 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:border-cyan-400/60"
+                    >
+                        Ouvrir en grand
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleSaveImageAs}
+                        disabled={isSavingImage}
+                        className="rounded-xl border border-emerald-500/30 bg-emerald-900/20 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:border-emerald-400/60 disabled:opacity-60"
+                    >
+                        {isSavingImage ? "Téléchargement..." : "Télécharger..."}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleDeleteImage}
+                        disabled={isDeletingImage}
+                        className="rounded-xl border border-rose-500/30 bg-rose-900/20 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:border-rose-400/60 disabled:opacity-60"
+                    >
+                        {isDeletingImage ? "Suppression..." : "Supprimer"}
+                    </button>
+                </div>
+                {saveStatus ? <p className="text-[0.68rem] text-slate-400">{saveStatus}</p> : null}
+
+                {lightboxOpen ? (
+                    <div
+                        className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 p-4"
+                        onClick={() => setLightboxOpen(false)}
+                    >
+                        <div className="relative max-h-full max-w-6xl" onClick={(e) => e.stopPropagation()}>
+                            <button
+                                type="button"
+                                onClick={() => setLightboxOpen(false)}
+                                className="absolute right-2 top-2 rounded-full bg-black/60 px-3 py-1 text-sm text-white"
+                            >
+                                Fermer
+                            </button>
+                            <img
+                                src={message.imageDataUrl}
+                                alt="image générée agrandie"
+                                className="max-h-[90vh] max-w-[95vw] rounded-xl border border-white/20 object-contain"
+                            />
+                        </div>
+                    </div>
+                ) : null}
+            </div>
+        );
+    }
 
     // ── Blocs tool call et tool feedback ─────────────────
     const normalizedMsgContent = normalizeToolTags(message.content || "");

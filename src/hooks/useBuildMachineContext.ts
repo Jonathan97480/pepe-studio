@@ -15,7 +15,12 @@ function shouldUseCompactSystemPrompt(_modelPath: string): boolean {
     return true;
 }
 
-export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatModeRef, modelPath }: UseBuildMachineContextOptions) {
+export function useBuildMachineContext({
+    deepThinkingEnabled,
+    isEnabled,
+    chatModeRef,
+    modelPath,
+}: UseBuildMachineContextOptions) {
     const [machineContext, setMachineContext] = useState<string | null>(null);
     const [isContextReady, setIsContextReady] = useState(false);
 
@@ -105,6 +110,8 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                 "get_dev_server_info",
                 "save_image",
                 "download_image",
+                "generate_image",
+                "list_sd_models",
                 "ask_user",
                 "set_mode",
                 "request_agent_mode",
@@ -125,36 +132,74 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                 "get_tool_doc",
             ]) {
                 const groupId =
-                    id.startsWith("terminal") || id === "cmd" || id === "list_terminals" || id === "get_terminal_history" || id === "close_terminal" || id === "create_terminal"
+                    id.startsWith("terminal") ||
+                    id === "cmd" ||
+                    id === "list_terminals" ||
+                    id === "get_terminal_history" ||
+                    id === "close_terminal" ||
+                    id === "create_terminal"
                         ? "terminal"
                         : id === "get_hardware_info"
                           ? "terminal"
-                        : ["read_image", "read_image_batch", "list_folder_images", "save_image", "download_image"].includes(id)
-                          ? "images"
-                        : id.startsWith("read_") || id === "analyze_folder" || id === "write_file" || id === "patch_file" || id === "batch_rename" || id === "list_folder_pdfs" || id === "list_folder_files" || id === "list_folder_images"
-                          ? "files"
-                          : id.includes("skill")
-                            ? "skills"
-                            : id === "http_request"
-                              ? "http"
-                              : id === "search_web"
-                                ? "search_web"
-                                : id === "scrape_url"
-                                  ? "scrape_url"
-                                  : ["open_browser", "start_dev_server", "stop_dev_server", "get_browser_errors", "get_dev_server_info"].includes(id)
-                                    ? "browser"
-                                    : ["context7-search", "context7-docs"].includes(id)
-                                      ? "context7"
-                                        : ["create_mcp_server", "start_mcp_server", "call_mcp_tool", "list_mcp_servers"].includes(id)
-                                          ? "mcp"
-                                          : ["search_conversation"].includes(id)
-                                            ? "memory"
-                                            : ["get_plan", "save_plan", "set_todo", "check_todo"].includes(id)
-                                              ? "planning"
-                                              : ["save_fact"].includes(id)
-                                                ? "profile"
-                                                : null;
-                if (!groupId || toolOn(groupId) || id === "ask_user" || id === "set_mode" || id === "request_agent_mode" || id === "get_tool_doc") {
+                          : [
+                                  "read_image",
+                                  "read_image_batch",
+                                  "list_folder_images",
+                                  "save_image",
+                                  "download_image",
+                                  "generate_image",
+                                  "list_sd_models",
+                              ].includes(id)
+                            ? "images"
+                            : id.startsWith("read_") ||
+                                id === "analyze_folder" ||
+                                id === "write_file" ||
+                                id === "patch_file" ||
+                                id === "batch_rename" ||
+                                id === "list_folder_pdfs" ||
+                                id === "list_folder_files" ||
+                                id === "list_folder_images"
+                              ? "files"
+                              : id.includes("skill")
+                                ? "skills"
+                                : id === "http_request"
+                                  ? "http"
+                                  : id === "search_web"
+                                    ? "search_web"
+                                    : id === "scrape_url"
+                                      ? "scrape_url"
+                                      : [
+                                              "open_browser",
+                                              "start_dev_server",
+                                              "stop_dev_server",
+                                              "get_browser_errors",
+                                              "get_dev_server_info",
+                                          ].includes(id)
+                                        ? "browser"
+                                        : ["context7-search", "context7-docs"].includes(id)
+                                          ? "context7"
+                                          : [
+                                                  "create_mcp_server",
+                                                  "start_mcp_server",
+                                                  "call_mcp_tool",
+                                                  "list_mcp_servers",
+                                              ].includes(id)
+                                            ? "mcp"
+                                            : ["search_conversation"].includes(id)
+                                              ? "memory"
+                                              : ["get_plan", "save_plan", "set_todo", "check_todo"].includes(id)
+                                                ? "planning"
+                                                : ["save_fact"].includes(id)
+                                                  ? "profile"
+                                                  : null;
+                if (
+                    !groupId ||
+                    toolOn(groupId) ||
+                    id === "ask_user" ||
+                    id === "set_mode" ||
+                    id === "request_agent_mode" ||
+                    id === "get_tool_doc"
+                ) {
                     enabledToolIds.add(id);
                 }
             }
@@ -173,6 +218,10 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                     `Pour les informations matérielles locales (GPU, RAM, CPU), préfère <tool>{"get_hardware_info":true}</tool> avant d'utiliser cmd.`,
                     `Quand l'utilisateur demande une action explicite ou une information locale vérifiable, utilise l'outil adapté au lieu de refuser.`,
                     `N'invente jamais l'exécution d'une action: soit tu utilises un outil, soit tu réponds en texte.`,
+                    `Les mots comme terminal, images, files, browser, web, planning, memory, mcp sont des CATÉGORIES, pas des clés d'outil.`,
+                    `N'écris JAMAIS <tool>{"images":"generate_image"}</tool> ni <tool>{"files":"read_file"}</tool>.`,
+                    `Tu dois toujours utiliser la clé exacte de l'outil, par exemple: <tool>{"generate_image":"un chat roux mignon"}</tool>.`,
+                    `Pour générer une image, la forme correcte est la clé generate_image avec le prompt comme valeur principale.`,
                     `Tu as accès au terminal PowerShell local: tu peux donc obtenir des informations système réelles de la machine.`,
                     `Si un outil échoue 2 fois pour la même raison, arrête-toi et explique brièvement le blocage.`,
                     ``,
@@ -191,6 +240,7 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                     `Avant d'utiliser un outil dont le format t'est incertain, consulte sa doc détaillée:`,
                     `- <tool>{"get_tool_doc":"cmd"}</tool>`,
                     `- <tool>{"get_tool_doc":"write_file"}</tool>`,
+                    `- <tool>{"get_tool_doc":"generate_image"}</tool>`,
                     `- <tool>{"get_tool_doc":"terminal"}</tool>`,
                     `- <tool>{"get_tool_doc":"skill"}</tool>`,
                     `Règle: index compact d'abord, doc détaillée seulement si nécessaire.`,
@@ -741,6 +791,35 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                 ...(toolOn("images")
                     ? [
                           `=== GESTION DES IMAGES ===`,
+                          `Générer une image localement (Stable Diffusion) :`,
+                          `  <tool>{"generate_image": "a red cat on a rooftop at sunset, photorealistic"}</tool>`,
+                          `  Version avancée : <tool>{"generate_image": "epic fantasy portrait", "aspect_ratio": "16/9", "negative_prompt": "blurry, text", "steps": 30, "upscale": true, "seed": 42}</tool>`,
+                          `  → Si l'utilisateur demande un format (ex: 16/9, 9:16, carré, portrait), passe aspect_ratio dans l'appel`,
+                          `  → Utilise negative_prompt pour retirer les défauts (ex: "blurry, text, watermark")`,
+                          `  → Utilise d'abord list_sd_models si le modèle SD est inconnu`,
+                          ``,
+                          `RÈGLES PROMPT SD OBLIGATOIRES :`,
+                          `  ⚠️  RÈGLE N°1 ABSOLUE : Le prompt SD DOIT TOUJOURS être en ANGLAIS.`,
+                          `     Le modèle SD est entraîné sur des données anglaises — un prompt français donne des résultats aléatoires (ex: voiture au lieu d'album rock).`,
+                          `     Si l'utilisateur décrit en français → traduis en mots-clés anglais avant de générer.`,
+                          `     ✅ BON : <tool>{"generate_image": "intense epic rock album cover, grunge style, flames, desolate landscape, dramatic silhouette, dark palette, blood red, charcoal gray", "aspect_ratio": "1:1"}</tool>`,
+                          `     ❌ MAUVAIS : <tool>{"generate_image": "Pochette d'album rock, paysage désolé, gris charbon"}</tool>`,
+                          `  2. Portrait / personne seule : AJOUTE TOUJOURS "solo, 1person" au début du prompt positif`,
+                          `     Ex: <tool>{"generate_image": "solo, 1person, female elf portrait, front view, detailed"}</tool>`,
+                          `  3. Plusieurs personnes : indique "2persons" ou "group of N" selon le cas`,
+                          `  4. Toujours décrire la composition : "front view", "half-body portrait", "wide shot", etc.`,
+                          `  5. Toujours décrire l'éclairage : "studio lighting", "natural light", "cinematic lighting"`,
+                          `  6. Format/ratio → utilise TOUJOURS aspect_ratio (pas dans le texte du prompt)`,
+                          `     "carré" / "square" → "aspect_ratio": "1:1"`,
+                          `     "portrait" (vertical) → "aspect_ratio": "9:16"`,
+                          `     "paysage" / "landscape" → "aspect_ratio": "16:9"`,
+                          `  7. Les tokens qualité (masterpiece, best quality...) sont injectés automatiquement — ne les répète pas`,
+                          `  → Génération locale via sd.exe (GPU si libre, fallback CPU si le LLM occupe le GPU)`,
+                          `  → Le résultat est une image locale affichable ensuite avec read_image`,
+                          ``,
+                          `Lister les modèles Stable Diffusion disponibles :`,
+                          `  <tool>{"list_sd_models": true}</tool>`,
+                          ``,
                           `Lister les images d'un dossier :`,
                           `  <tool>{"list_folder_images": "E:/images"}</tool>`,
                           `  Avec sous-dossiers : <tool>{"list_folder_images": "E:/images", "recursive": true}</tool>`,
@@ -951,7 +1030,7 @@ export function useBuildMachineContext({ deepThinkingEnabled, isEnabled, chatMod
                 `  <tool>{"get_tool_doc": "write_file"}</tool>       → doc complète de write_file`,
                 `  <tool>{"get_tool_doc": "terminal"}</tool>         → tous les outils contenant "terminal"`,
                 `  <tool>{"get_tool_doc": "skill"}</tool>            → tous les outils liés aux skills`,
-                `Outils documentés : cmd, write_file, patch_file, read_file, analyze_folder, list_folder_files, list_folder_images, read_image, read_image_batch, create_terminal, terminal_exec,`,
+                `Outils documentés : cmd, write_file, patch_file, read_file, analyze_folder, list_folder_files, list_folder_images, read_image, read_image_batch, generate_image, list_sd_models, create_terminal, terminal_exec,`,
                 `  terminal_start_interactive, terminal_send_stdin, close_terminal, list_terminals, get_terminal_history, create_skill, run_skill, read_skill,`,
 
                 `  patch_skill, delete_skill, http_request, search_web, scrape_url, open_browser,`,

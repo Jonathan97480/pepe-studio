@@ -16,6 +16,7 @@ import { MessageBubble } from "./chat/MessageBubble";
 import { ChatComposer } from "./chat/ChatComposer";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ConversationPanels } from "./chat/ConversationPanels";
+import { ImageFormatPicker } from "./chat/ImageFormatPicker";
 import { useAutoCompact } from "../hooks/useAutoCompact";
 import { useBuildMachineContext } from "../hooks/useBuildMachineContext";
 import { useToolCalling } from "../hooks/useToolCalling";
@@ -52,6 +53,7 @@ export default function ChatWindow({
         resetMessages,
         updateLastAssistantContent,
         cancelGeneration,
+        insertMessage,
     } = useLlama();
     const {
         modelPath,
@@ -75,6 +77,7 @@ export default function ChatWindow({
         setTurboQuant,
         setReasoningBudget,
         setThinkingEnabled,
+        sdModelPath,
         isModelLoaded,
         setIsModelLoaded,
         loadedModelPath,
@@ -94,9 +97,15 @@ export default function ChatWindow({
     const [isLoadingConv, setIsLoadingConv] = useState(false);
     const [isResumingConv, setIsResumingConv] = useState(false);
     const [toolRunning, setToolRunning] = useState(false);
+    const [isImageGenerating, setIsImageGenerating] = useState(false);
     const [conversationId, setConversationId] = useState<number | null>(null);
     const [deepThinkingEnabled, setDeepThinkingEnabled] = useState(true);
     const [chatMode, setChatMode] = useState<ChatMode>("plan");
+    const [selectedSDFormat, setSelectedSDFormat] = useState<string | null>(null);
+    const [selectedBatchCount, setSelectedBatchCount] = useState<number>(1);
+    const [showSDFormatPicker, setShowSDFormatPicker] = useState(false);
+    const [liveImagePreview, setLiveImagePreview] = useState<string | null>(null);
+    const [liveImageProgress, setLiveImageProgress] = useState<number>(0);
     const chatModeRef = useRef<ChatMode>("plan");
     const [pendingQuestion, setPendingQuestion] = useState<{
         question: string;
@@ -228,17 +237,43 @@ export default function ChatWindow({
         if (requestedId !== null) {
             setIsLoadingConv(true);
             Promise.all([
-                invoke<{ role: string; content: string }[]>("load_conversation_messages", {
+                invoke<
+                    {
+                        role: string;
+                        content: string;
+                        imagePath?: string | null;
+                        displayOnly?: boolean;
+                    }[]
+                >("load_conversation_messages", {
                     conversationId: requestedId,
                 }),
                 invoke<string>("get_project_structure", { conversationId: requestedId }).catch(() => ""),
                 invoke<string>("get_conversation_plan", { conversationId: requestedId }).catch(() => ""),
             ])
-                .then(([msgs, structure, plan]) => {
-                    const llamaMsgs = msgs.map((m) => ({
-                        role: m.role as "user" | "assistant",
-                        content: m.content,
-                    }));
+                .then(async ([msgs, structure, plan]) => {
+                    const llamaMsgs: LlamaMessage[] = await Promise.all(
+                        msgs.map(async (m) => {
+                            let imageDataUrl: string | undefined;
+                            if (m.imagePath) {
+                                try {
+                                    const image = await invoke<{ data_url: string }>("read_image", {
+                                        path: m.imagePath,
+                                    });
+                                    imageDataUrl = image.data_url;
+                                } catch {
+                                    imageDataUrl = undefined;
+                                }
+                            }
+
+                            return {
+                                role: m.role as "user" | "assistant" | "system",
+                                content: m.content,
+                                displayOnly: m.displayOnly ?? false,
+                                imagePath: m.imagePath ?? undefined,
+                                imageDataUrl,
+                            };
+                        }),
+                    );
                     resetMessages(llamaMsgs);
                     setConversationId(requestedId);
                     convTitleSetRef.current = true;
@@ -322,6 +357,13 @@ export default function ChatWindow({
         projectStructureRef,
         setPlanContent,
         planRef,
+        setImageGenerating: setIsImageGenerating,
+        setLiveImagePreview,
+        setLiveImageProgress,
+        insertMessage,
+        selectedSDFormat,
+        selectedBatchCount,
+        selectedSDModel: sdModelPath,
     });
 
     const assistantMessages = useMemo<LlamaMessage[]>(() => {
@@ -632,8 +674,29 @@ export default function ChatWindow({
                                 editMessage={editMessage}
                                 handleResendEdit={handleResendEdit}
                                 deleteMessage={deleteMessage}
+                                conversationId={conversationId}
                             />
                         ))
+                    )}
+                    {isImageGenerating && (
+                        <div className="flex items-center gap-4 rounded-2xl border border-purple-500/30 bg-purple-950/20 px-5 py-4">
+                            <div className="relative h-10 w-10 flex-shrink-0">
+                                <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-r-pink-400 border-t-purple-400" />
+                                <div
+                                    className="absolute inset-1 animate-spin rounded-full border-2 border-transparent border-b-indigo-400 border-l-violet-400"
+                                    style={{ animationDirection: "reverse", animationDuration: "1.5s" }}
+                                />
+                                <div className="absolute inset-0 flex items-center justify-center text-lg">🎨</div>
+                            </div>
+                            <div className="flex flex-col gap-0.5">
+                                <span className="animate-pulse font-semibold text-purple-200">
+                                    Génération d&apos;image en cours…
+                                </span>
+                                <span className="text-xs text-purple-400/70">
+                                    Le LLM reste actif si la VRAM le permet
+                                </span>
+                            </div>
+                        </div>
                     )}
                     <div ref={bottomRef} />
                     <ConversationPanels
@@ -693,43 +756,99 @@ export default function ChatWindow({
                     />
                 </div>
             </div>
-            <ChatComposer
-                todoItems={todoItems}
-                todoCollapsed={todoCollapsed}
-                onToggleTodoCollapsed={() => setTodoCollapsed((value) => !value)}
-                onClearTodoItems={() => setTodoItems([])}
-                projectStructure={projectStructure}
-                projectStructureCollapsed={projectStructureCollapsed}
-                onToggleProjectStructureCollapsed={() => setProjectStructureCollapsed((value) => !value)}
-                conversationId={conversationId}
-                onClearProjectStructure={() => setProjectStructure("")}
-                isIndexing={isIndexing}
-                attachments={attachments}
-                onRemoveAttachment={(index) => setAttachments((prev) => prev.filter((_, item) => item !== index))}
-                isDragging={isDragging}
-                handleDragOver={handleDragOver}
-                handleDragEnter={handleDragEnter}
-                handleDragLeave={handleDragLeave}
-                handleDrop={handleDrop}
-                fileInputRef={fileInputRef}
-                textareaRef={textareaRef}
-                prompt={prompt}
-                onPromptChange={setPrompt}
-                onSend={handleSend}
-                isContextReady={isContextReady}
-                handleFileSelect={handleFileSelect}
-                isListening={isListening}
-                onToggleMic={handleMic}
-                thinkingEnabled={thinkingEnabled}
-                onToggleThinking={handleToggleThinking}
-                deepThinkingEnabled={deepThinkingEnabled}
-                onToggleDeepThinking={toggleDeepThinking}
-                loading={loading}
-                streaming={streaming}
-                onCancelGeneration={cancelGeneration}
-                error={error}
-                autoLoadError={autoLoadError}
-            />
+            <div className="border-t border-white/10">
+                {showSDFormatPicker && (
+                    <div className="bg-slate-950/80 px-6 pt-3 backdrop-blur-xl">
+                        <div className="mx-auto max-w-3xl space-y-2">
+                            <ImageFormatPicker selected={selectedSDFormat} onChange={setSelectedSDFormat} />
+                            <div className="flex items-center gap-2 text-xs text-slate-400">
+                                <span className="shrink-0 font-medium text-slate-300">Itérations :</span>
+                                {[1, 2, 3, 4].map((n) => (
+                                    <button
+                                        key={n}
+                                        onClick={() => setSelectedBatchCount(n)}
+                                        className={`rounded-md px-3 py-1 font-mono transition-colors ${
+                                            selectedBatchCount === n
+                                                ? "bg-purple-600 text-white"
+                                                : "bg-white/10 text-slate-300 hover:bg-white/20"
+                                        }`}
+                                    >
+                                        {n}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {isImageGenerating && (
+                    <div className="bg-slate-950/80 px-6 pt-3 backdrop-blur-xl">
+                        <div className="mx-auto max-w-3xl rounded-xl border border-cyan-500/30 bg-cyan-950/20 p-3">
+                            <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-widest text-cyan-300">
+                                <span>Apercu SD en temps reel</span>
+                                {liveImageProgress > 0 ? (
+                                    <span className="font-mono text-cyan-400">{liveImageProgress}%</span>
+                                ) : (
+                                    <span className="font-mono text-cyan-400">…</span>
+                                )}
+                            </div>
+                            {liveImagePreview ? (
+                                <img
+                                    src={liveImagePreview}
+                                    alt="Apercu generation en cours"
+                                    className="max-h-64 w-full rounded-lg border border-white/10 object-contain"
+                                />
+                            ) : (
+                                <div className="h-3 w-full overflow-hidden rounded-full bg-cyan-950/60">
+                                    <div
+                                        className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-purple-500 transition-all duration-300"
+                                        style={{ width: `${Math.max(8, liveImageProgress)}%` }}
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+                <ChatComposer
+                    todoItems={todoItems}
+                    todoCollapsed={todoCollapsed}
+                    onToggleTodoCollapsed={() => setTodoCollapsed((value) => !value)}
+                    onClearTodoItems={() => setTodoItems([])}
+                    projectStructure={projectStructure}
+                    projectStructureCollapsed={projectStructureCollapsed}
+                    onToggleProjectStructureCollapsed={() => setProjectStructureCollapsed((value) => !value)}
+                    conversationId={conversationId}
+                    onClearProjectStructure={() => setProjectStructure("")}
+                    isIndexing={isIndexing}
+                    attachments={attachments}
+                    onRemoveAttachment={(index) => setAttachments((prev) => prev.filter((_, item) => item !== index))}
+                    isDragging={isDragging}
+                    handleDragOver={handleDragOver}
+                    handleDragEnter={handleDragEnter}
+                    handleDragLeave={handleDragLeave}
+                    handleDrop={handleDrop}
+                    fileInputRef={fileInputRef}
+                    textareaRef={textareaRef}
+                    prompt={prompt}
+                    onPromptChange={setPrompt}
+                    onSend={handleSend}
+                    isContextReady={isContextReady}
+                    handleFileSelect={handleFileSelect}
+                    isListening={isListening}
+                    onToggleMic={handleMic}
+                    thinkingEnabled={thinkingEnabled}
+                    onToggleThinking={handleToggleThinking}
+                    deepThinkingEnabled={deepThinkingEnabled}
+                    onToggleDeepThinking={toggleDeepThinking}
+                    loading={loading}
+                    streaming={streaming}
+                    onCancelGeneration={cancelGeneration}
+                    error={error}
+                    autoLoadError={autoLoadError}
+                    showSDFormatPicker={showSDFormatPicker}
+                    onToggleSDFormatPicker={() => setShowSDFormatPicker((v) => !v)}
+                    selectedSDFormat={selectedSDFormat}
+                />
+            </div>
         </div>
     );
 }

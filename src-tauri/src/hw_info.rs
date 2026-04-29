@@ -469,7 +469,12 @@ pub fn list_folder_files(
     });
 
     let mut results: Vec<String> = Vec::new();
-    collect_matching_files(p, recursive.unwrap_or(false), extension_set.as_ref(), &mut results)?;
+    collect_matching_files(
+        p,
+        recursive.unwrap_or(false),
+        extension_set.as_ref(),
+        &mut results,
+    )?;
     results.sort();
     Ok(results)
 }
@@ -774,6 +779,92 @@ pub fn save_image(
         "dataUrl": data_url,
         "filename": fname,
     }))
+}
+
+/// Ouvre un dialogue natif "Enregistrer sous" pour choisir où sauvegarder l'image base64.
+#[command]
+pub fn save_image_as(
+    data_url: String,
+    filename: Option<String>,
+) -> Result<serde_json::Value, String> {
+    use base64::Engine;
+    use tauri::api::dialog::blocking::FileDialogBuilder;
+
+    let (mime, b64_data) = if let Some(rest) = data_url.strip_prefix("data:") {
+        let parts: Vec<&str> = rest.splitn(2, ";base64,").collect();
+        if parts.len() == 2 {
+            (parts[0].to_string(), parts[1].to_string())
+        } else {
+            return Err("Format data URL invalide — attendu : data:<mime>;base64,<data>".into());
+        }
+    } else {
+        return Err("Le data_url doit commencer par 'data:'".into());
+    };
+
+    let ext = mime
+        .split('/')
+        .nth(1)
+        .unwrap_or("png")
+        .split('+')
+        .next()
+        .unwrap_or("png");
+
+    let suggested_name = filename.unwrap_or_else(|| {
+        format!(
+            "image_{}.{}",
+            chrono::Local::now().format("%Y%m%d_%H%M%S"),
+            ext
+        )
+    });
+
+    let selected_path = FileDialogBuilder::new()
+        .set_title("Enregistrer l'image")
+        .set_file_name(&suggested_name)
+        .add_filter("Image", &[ext])
+        .save_file()
+        .ok_or_else(|| "Sauvegarde annulée".to_string())?;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64_data.as_bytes())
+        .map_err(|e| format!("Erreur décodage base64 : {}", e))?;
+    std::fs::write(&selected_path, &bytes).map_err(|e| e.to_string())?;
+
+    let final_name = selected_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("image")
+        .to_string();
+
+    Ok(serde_json::json!({
+        "path": selected_path.to_string_lossy(),
+        "dataUrl": data_url,
+        "filename": final_name,
+    }))
+}
+
+/// Supprime un fichier image généré localement.
+#[command]
+pub fn delete_generated_image(path: String) -> Result<String, String> {
+    let image_path = std::path::PathBuf::from(path.trim());
+    if path.trim().is_empty() {
+        return Err("Chemin image vide".into());
+    }
+    if !image_path.exists() {
+        return Ok("Image déjà absente".into());
+    }
+
+    let ext = image_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let is_image = matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp");
+    if !is_image {
+        return Err("Le fichier ciblé n'est pas une image prise en charge".into());
+    }
+
+    std::fs::remove_file(&image_path).map_err(|e| format!("Suppression impossible: {}", e))?;
+    Ok("Image supprimée".into())
 }
 
 /// Télécharge une image depuis une URL HTTP et la sauvegarde sur le disque.
