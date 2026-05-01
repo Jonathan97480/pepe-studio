@@ -1,5 +1,33 @@
 # TODO Pépé-Studio
 
+## Aujourd'hui — 01/05/2026 (Préparation Sprint Refactor)
+
+- [x] Valider le calendrier de refactor et les jalons dans CALENDRIER_REFACTORING_V1.md
+- [x] Créer la branche de travail refactor
+    - Fait: git checkout -b refactor/v1-security-split
+- [x] Capturer la baseline qualité (avant modifications)
+    - Résultat: npm run check ❌ (lint bloqué par 1 erreur existante dans src/context/ModelSettingsContext.tsx)
+    - Résultat: npm run test:web ✅ (26/26 tests)
+    - Résultat: npm run test:rust ✅
+- [x] Dresser la carte de découpage de src-tauri/src/api_server.rs
+    - Modules cibles: state, health/models, chat, tools, handlers
+- [x] Définir la checklist sécurité quotidienne
+    - Command injection
+    - Path traversal
+    - unwrap/expect critiques
+    - CORS et validation input
+    - Journalisation d'audit
+- [x] Préparer la QA docs/prompts (journée du 01/06)
+    - Fichiers docs: README.md, CHANGELOG.md, RELEASE_CHECKLIST.md, CONTRIBUTING.md
+    - Prompts système: instructions globales, garde-fous, tags outils
+- [x] Mettre à jour le statut de fin de journée
+    - Résultat: baseline enregistrée + branche prête + plan de découpage validé
+
+### Blocage à traiter lundi matin
+
+- [ ] Corriger l'erreur lint React Hooks dans src/context/ModelSettingsContext.tsx:131 (setState dans useEffect)
+- [ ] Relancer npm run check pour obtenir baseline 100% verte
+
 1. Configurer tauri.conf.json pour les dépendances système (Llama.cpp, accès fichiers, sidecars)
 2. Créer le composant principal Layout (Sidebar + Zone de Chat) avec Tailwind CSS
 3. Définir le schéma TypeScript de l’orchestrateur UI <-> Llama.cpp
