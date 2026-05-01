@@ -398,7 +398,11 @@ export function useToolCalling({
                             };
                             // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ DÃƒÆ’Ã‚Â©tection de boucle : mÃƒÆ’Ã‚Âªme tool call deux fois de suite ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
                             const toolSignature = JSON.stringify(parsedTool);
-                            if (toolSignature === lastToolSignatureRef.current && !lastToolWasErrorRef.current) {
+                            if (
+                                !forceExecute &&
+                                toolSignature === lastToolSignatureRef.current &&
+                                !lastToolWasErrorRef.current
+                            ) {
                                 await sendPrompt(
                                     `[Système] Action bloquée : tu viens d'exécuter exactement ce même outil et cette NOUVELLE tentative n'a PAS été exécutée.
 Ne prétends pas qu'elle a réussi.
@@ -407,7 +411,6 @@ Soit tu utilises un outil différent, soit tu réponds avec le dernier résultat
                                 );
                                 return;
                             }
-                            lastToolSignatureRef.current = toolSignature;
                             const hadPreviousToolError = lastToolWasErrorRef.current;
                             const primaryToolName = Object.keys(parsedTool)[0]?.toLowerCase() ?? "";
 
@@ -466,6 +469,11 @@ Soit tu utilises un outil différent, soit tu réponds avec le dernier résultat
                                 if (!hasConsultedDoc || hadPreviousToolError) {
                                     const doc = resolveToolDoc(primaryToolName);
                                     consultedToolDocsRef.current.add(primaryToolName);
+                                    // Important: si on envoie la doc "suite à erreur", on doit lever ce flag,
+                                    // sinon chaque retry renverra la doc et l'outil ne s'exécutera jamais.
+                                    if (hadPreviousToolError) {
+                                        lastToolWasErrorRef.current = false;
+                                    }
                                     const reason = hadPreviousToolError
                                         ? `Suite à une erreur précédente, consultation obligatoire de la doc pour \`${primaryToolName}\`.`
                                         : `Première utilisation de \`${primaryToolName}\` dans cette conversation : consultation obligatoire de la doc.`;
@@ -476,6 +484,10 @@ Soit tu utilises un outil différent, soit tu réponds avec le dernier résultat
                                     return;
                                 }
                             }
+
+                            // On ne mémorise la signature qu'au moment d'une exécution réelle.
+                            // Les étapes "doc obligatoire"/confirmations ne doivent pas déclencher l'anti-boucle.
+                            lastToolSignatureRef.current = toolSignature;
 
                             // Reset avant exécution; les handlers remettent ce flag à true via markError si besoin.
                             lastToolWasErrorRef.current = false;

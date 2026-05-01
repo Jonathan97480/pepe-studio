@@ -13,7 +13,7 @@
     "lint:fix": "eslint src/ tests/ --ext .ts,.tsx --fix",
     "check": "npm run lint && npm run typecheck",
     "test": "npm run test:web && npm run test:rust",
-    "test:web": "tsc -p tsconfig.test.json && node --test .codex-tests/tests",
+    "test:web": "tsc -p tsconfig.test.json && node --test \".codex-tests/tests/*.test.js\"",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\"",
     "typecheck": "tsc --noEmit"

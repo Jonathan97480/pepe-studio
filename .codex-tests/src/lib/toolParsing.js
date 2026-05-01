@@ -14,12 +14,14 @@ const normalizeToolTags = (text) => {
     // Compatibilité legacy : certains modèles émettent "generate_image:..." sans JSON/tag.
     // On ne convertit que si tout le message correspond à une unique commande key:value.
     const bare = t.trim();
-    const bareMatch = bare.match(/^([a-z_]+)\s*:\s*([\s\S]+)$/i);
+    const bareMatch = bare.match(/^([a-z0-9_]+)\s*:\s*([\s\S]+)$/i);
     if (bareMatch && !bare.includes("<tool>")) {
         const key = bareMatch[1].toLowerCase();
         const value = bareMatch[2].trim();
         const stringKeys = new Set([
             "generate_image",
+            "generate_3d_model",
+            "install_trellis",
             "cmd",
             "read_file",
             "analyze_folder",
@@ -60,6 +62,13 @@ const normalizeToolTags = (text) => {
     t = t.replace(/<get_browser_errors[^>]*\/?>/gi, '<tool>{"get_browser_errors": true}</tool>');
     t = t.replace(/<stop_dev_server[^>]*\/?>/gi, '<tool>{"stop_dev_server": true}</tool>');
     t = t.replace(/<get_dev_server_info[^>]*\/?>/gi, '<tool>{"get_dev_server_info": true}</tool>');
+    // generate_3d_model : <generate_3d image="chemin/image.png" texture_resolution="1024" />
+    t = t.replace(/<generate_3d(?:\s+image="([^"]*)")?(?:\s+texture_resolution="([^"]*)")?[^>]*\/?>/gi, (_, img, res) => {
+        const obj = { generate_3d_model: img ?? "" };
+        if (res)
+            obj.texture_resolution = Number(res);
+        return `<tool>${JSON.stringify(obj)}</tool>`;
+    });
     return t;
 };
 exports.normalizeToolTags = normalizeToolTags;
@@ -135,6 +144,7 @@ const extractSimpleTool = (raw) => {
     const directPatterns = [
         { key: "cmd", regex: /"cmd"\s*:\s*"([\s\S]*?)"/i },
         { key: "generate_image", regex: /"generate_image"\s*:\s*"([\s\S]*?)"/i },
+        { key: "generate_3d_model", regex: /"generate_3d_model"\s*:\s*"([\s\S]*?)"/i },
         { key: "read_file", regex: /"read_file"\s*:\s*"([\s\S]*?)"/i },
         { key: "analyze_folder", regex: /"analyze_folder"\s*:\s*"([\s\S]*?)"/i },
         { key: "read_image", regex: /"read_image"\s*:\s*"([\s\S]*?)"/i },
@@ -155,12 +165,14 @@ const extractSimpleTool = (raw) => {
             return { [key]: match[1].replace(/\\"/g, '"').trim() };
     }
     // Compatibilité syntaxe simple sans guillemets : generate_image:un chat bleu mignon
-    const bareKv = trimmed.match(/^([a-z_]+)\s*:\s*([\s\S]+)$/i);
+    const bareKv = trimmed.match(/^([a-z0-9_]+)\s*:\s*([\s\S]+)$/i);
     if (bareKv) {
         const key = bareKv[1].toLowerCase();
         const value = bareKv[2].trim();
         const stringKeys = new Set([
             "generate_image",
+            "generate_3d_model",
+            "install_trellis",
             "cmd",
             "read_file",
             "analyze_folder",
@@ -192,6 +204,8 @@ const extractSimpleTool = (raw) => {
         return { get_hardware_info: true };
     if (/"list_sd_models"/i.test(trimmed))
         return { list_sd_models: true };
+    if (/"install_trellis"/i.test(trimmed))
+        return { install_trellis: true };
     // Fallback tolérant pour {"cmd"...:"..."} cassé: on prend la dernière chaîne après "cmd".
     if (/"cmd"/i.test(trimmed)) {
         const afterCmd = trimmed.slice(trimmed.search(/"cmd"/i) + 5);

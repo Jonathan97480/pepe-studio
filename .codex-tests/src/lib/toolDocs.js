@@ -351,16 +351,31 @@ Usage : <tool>{"get_project_structure": ""}</tool>
 • Retourne la structure de projet actuellement mémorisée pour cette conversation.
 • Note : la structure est déjà injectée dans le contexte — utilise get_project_structure seulement si tu veux la relire explicitement.`,
     generate_image: `=== generate_image — Générer une image avec Stable Diffusion ===
-Usage : <tool>{"generate_image": "un chat roux assis sur un toit au coucher de soleil, photoréaliste"}</tool>
-Usage avancé : <tool>{"generate_image": "portrait d'une guerrière elfe", "aspect_ratio": "16/9", "negative_prompt": "flou, mauvaise qualité", "steps": 25, "upscale": true, "seed": 42}</tool>
+⚠️ RÈGLE ABSOLUE : le prompt DOIT être en anglais.
+• Si l'utilisateur écrit en français, traduis d'abord en mots-clés anglais avant d'appeler generate_image.
+Usage : <tool>{"generate_image": "a ginger cat sitting on a rooftop at sunset, photorealistic"}</tool>
+Usage avancé : <tool>{"generate_image": "portrait of an elven warrior", "preset": "portrait", "aspect_ratio": "16/9", "negative_prompt": "blurry, low quality", "steps": 40, "upscale": true, "seed": 42}</tool>
 
 Paramètres optionnels :
 • aspect_ratio : ratio souhaité (ex: "16/9", "9:16", "1:1", "landscape", "portrait", "square")
     - Si width/height sont absents, ils sont calculés automatiquement depuis ce ratio
+• preset : profil de génération. Valeurs: "portrait", "wide_scene", "product", "illustration", "cinematic", "architecture", "food", "fantasy_art", "logo_flat", "default"
+    - Si absent, le preset est choisi automatiquement selon le prompt
+    - Règle de sélection recommandée:
+      • portrait: visage/personnage principal (gros plan, headshot, selfie)
+      • wide_scene: personnage dans grand décor, plan large, paysage cinématique
+      • product: objet isolé, packshot, e-commerce
+      • illustration: anime, dessin, concept art, rendu stylisé
+    • cinematic: scène dramatique type film, ambiance cinéma, éclairage contrasté
+    • architecture: intérieur/extérieur bâtiment, immobilier, rendu d'espace
+    • food: plat culinaire, photo de restaurant, packshot alimentaire
+    • fantasy_art: univers fantasy, créatures, magie, armures épiques
+    • logo_flat: logo/icône en style vectoriel simple et propre
+        - Priorité auto: si le prompt contient un humain/personnage + un grand décor, utiliser wide_scene
 • negative_prompt : ce que tu NE veux PAS dans l'image (ex: "flou, texte, marque")
     - Alias tolérés : negativePrompt, negativeprompt
     - Si absent, un negative_prompt par défaut est appliqué automatiquement
-• steps : nombre d'étapes (défaut: 20, max recommandé: 30)
+• steps : nombre d'étapes (défaut conseillé: 35 à 40 selon preset, max: 50)
 • width/height : dimensions en pixels, multiples de 64 (défaut: 512x512)
 • upscale : true pour appliquer Real-ESRGAN x4 après génération
 • seed : graine pour reproductibilité (-1 = aléatoire)
@@ -374,4 +389,43 @@ IMPORTANT :
 Usage : <tool>{"list_sd_models": true}</tool>
 • Retourne la liste des modèles .safetensors et .ckpt trouvés dans models/sd/ et models/
 • À utiliser avant generate_image pour choisir le bon modèle`,
+    generate_3d_model: `=== generate_3d_model — Générer un modèle 3D GLB depuis une image ===
+Moteur : TRELLIS (Microsoft) — génération mesh, Gaussians et Radiance Field en une seule passe.
+Prérequis : TRELLIS + torch doivent être installés. Si ce n'est pas le cas, appelle d'abord install_trellis.
+
+Usage simple (chemin image) :
+    <tool>{"generate_3d_model": "C:/Users/moi/pepe-studio/images/chat_123456.png"}</tool>
+
+Usage avancé :
+    <tool>{"generate_3d_model": "C:/chemin/image.png", "texture_resolution": 1024, "seed": 42}</tool>
+
+Paramètres :
+    • generate_3d_model (string) : chemin ABSOLU vers l'image source PNG ou JPG.
+        → Utilise le champ imagePath d'une image générée précédemment.
+    • texture_resolution (number, optionnel) : 512 | 1024 | 2048. Défaut : 1024.
+    • seed (number, optionnel) : graine aléatoire pour la génération. Défaut : 1.
+    • simplify (number, optionnel) : ratio de simplification mesh (0.0-1.0). Défaut : 0.95.
+
+Flux typique :
+    1. L'utilisateur génère une image avec generate_image.
+    2. Le chemin de l'image est renvoyé dans le résultat (champ imagePath).
+    3. Appelle generate_3d_model avec ce chemin pour créer le modèle 3D.
+    4. Le GLB s'affiche directement dans le chat avec un viewer 3D interactif.
+
+⚠️ Si torch/TRELLIS manquent → appelle install_trellis d'abord (une seule fois).
+⚠️ TRELLIS nécessite ~16 GB VRAM et prend 1–5 min selon le GPU.
+⚠️ Première génération : téléchargement du modèle (~4 GB depuis Hugging Face).
+⚠️ Si erreur OOM : réduis texture_resolution à 512 pour diminuer la consommation mémoire.`,
+    install_trellis: `=== install_trellis — Installer TRELLIS + PyTorch (à faire une seule fois) ===
+Clone le dépôt TRELLIS (Microsoft) et installe torch + torchvision + torchaudio + dépendances.
+À appeler uniquement si generate_3d_model retourne une erreur "torch non disponible" ou "TRELLIS non installé".
+
+⚠️ Durée : 10 à 30 minutes (téléchargement PyTorch CUDA ~2 GB + dépendances TRELLIS).
+Prérequis : git + python dans PATH + accès internet + ~20 Go d'espace disque libre.
+GPU : NVIDIA recommandé avec ≥16 GB VRAM (A100, A6000, RTX 3090/4090...).
+
+Usage :
+    <tool>{"install_trellis": true}</tool>
+
+Après succès, la première génération téléchargera les poids du modèle (~4 GB depuis Hugging Face).`,
 };

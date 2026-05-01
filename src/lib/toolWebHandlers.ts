@@ -6,6 +6,7 @@ import type { Attachment, LlamaMessage } from "../hooks/useLlama";
 import { queryDocs, searchLibrary } from "../tools/Context7Client";
 import { invokeWithTimeout } from "./chatUtils";
 import type { LlamaLaunchConfig } from "./llamaWrapper";
+import { TOOL_DOCS } from "./toolDocs";
 
 type SendPrompt = (
     prompt: string,

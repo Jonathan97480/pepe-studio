@@ -96,7 +96,7 @@ export function MessageBubble({
         }
     }
 
-    // ── Image générée (rendu natif, évite les problèmes ReactMarkdown/CSP) ──
+        // ── Image générée (rendu natif, évite les problèmes ReactMarkdown/CSP) ──
     if (message.imageDataUrl) {
         return (
             <div key={index} className="flex flex-col gap-1 self-start max-w-[80%]">

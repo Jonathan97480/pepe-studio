@@ -25,7 +25,7 @@ export const normalizeToolTags = (text: string): string => {
     // Compatibilité legacy : certains modèles émettent "generate_image:..." sans JSON/tag.
     // On ne convertit que si tout le message correspond à une unique commande key:value.
     const bare = t.trim();
-    const bareMatch = bare.match(/^([a-z_]+)\s*:\s*([\s\S]+)$/i);
+    const bareMatch = bare.match(/^([a-z0-9_]+)\s*:\s*([\s\S]+)$/i);
     if (bareMatch && !bare.includes("<tool>")) {
         const key = bareMatch[1].toLowerCase();
         const value = bareMatch[2].trim();
@@ -187,7 +187,7 @@ export const extractSimpleTool = (raw: string): Record<string, string | boolean>
     }
 
     // Compatibilité syntaxe simple sans guillemets : generate_image:un chat bleu mignon
-    const bareKv = trimmed.match(/^([a-z_]+)\s*:\s*([\s\S]+)$/i);
+    const bareKv = trimmed.match(/^([a-z0-9_]+)\s*:\s*([\s\S]+)$/i);
     if (bareKv) {
         const key = bareKv[1].toLowerCase();
         const value = bareKv[2].trim();
