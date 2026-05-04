@@ -90,11 +90,15 @@
 
 ### Lundi 18/05/2026 — ModelsPanel.tsx
 
-- [ ] Découper `ModelsPanel.tsx` en composants dédiés (< 300 lignes chacun)
-- [ ] Vérifier props/types et comportements UI
-- [ ] Corriger imports et chemins
-- [ ] `npm run typecheck` ✅ + `npm run lint:fix` ✅
-- [ ] Commit
+- [x] Découper `ModelsPanel.tsx` en composants dédiés (< 300 lignes chacun)
+- [x] `primitives.tsx` — SliderParam, NumberParam, SectionHeader (85 lignes)
+- [x] `SdModelSelector.tsx` — carte Stable Diffusion (45 lignes)
+- [x] `SamplingAdvanced.tsx` — 6 sections sampling accordéon (107 lignes)
+- [x] `ModelConfigForm.tsx` — formulaire de configuration (209 lignes)
+- [x] `ModelCard.tsx` — carte modèle + expand (124 lignes)
+- [x] `ModelsPanel.tsx` réduit — orchestration seule (312 lignes)
+- [x] `npm run typecheck` ✅ + `npm run lint` ✅
+- [x] Commit
 
 ### Mardi 19/05/2026 — useBuildMachineContext.ts
 
