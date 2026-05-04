@@ -121,11 +121,15 @@ export function ModelSettingsProvider({ children }: { children: ReactNode }) {
     const [reasoningBudget, setReasoningBudget] = useState(defaultSettings.reasoningBudget);
     const [sampling, setSampling] = useState<SamplingSettings>(defaultSettings.sampling);
     const [thinkingEnabled, setThinkingEnabled] = useState(defaultSettings.thinkingEnabled);
-    const [sdModelPath, setSdModelPath] = useState<string | null>(
-        () => localStorage.getItem("customapp_sd_model_path") ?? defaultSettings.sdModelPath
-    );
+    const [sdModelPath, setSdModelPath] = useState<string | null>(defaultSettings.sdModelPath);
     const [isModelLoaded, setIsModelLoaded] = useState(false);
     const [loadedModelPath, setLoadedModelPath] = useState<string | null>(null);
+
+    useEffect(() => {
+        // Chargement initial depuis localStorage (côté client uniquement)
+        const saved = localStorage.getItem("customapp_sd_model_path");
+        if (saved) setSdModelPath(saved);
+    }, []);
 
     useEffect(() => {
         if (sdModelPath) {
