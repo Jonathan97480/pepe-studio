@@ -15,7 +15,6 @@ import {
     getPresetConfig,
     isLikelyFrench,
     resolvePreset,
-    type ImagePreset,
 } from "./sdPromptUtils";
 
 type SendPrompt = (
@@ -711,4 +710,3 @@ export async function handleGenerateImage(args: SharedArgs): Promise<boolean> {
 
     return true;
 }
-

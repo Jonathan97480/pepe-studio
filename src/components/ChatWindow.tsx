@@ -17,12 +17,14 @@ import { ChatComposer } from "./chat/ChatComposer";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ConversationPanels } from "./chat/ConversationPanels";
 import { ImageFormatPicker } from "./chat/ImageFormatPicker";
-import { useAutoCompact } from "../hooks/useAutoCompact";
+import { useConversationLoader } from "../hooks/useConversationLoader";
+import { useVoice } from "../hooks/useVoice";
 import { useBuildMachineContext } from "../hooks/useBuildMachineContext";
 import { useToolCalling } from "../hooks/useToolCalling";
 import { useFileAttachments } from "../hooks/useFileAttachments";
-import { inspectModelMetadata } from "../lib/modelMetadata";
 import { autoConfigureFromHardware, type HardwareInfo } from "../lib/hardwareConfig";
+import { inspectModelMetadata } from "../lib/modelMetadata";
+import { useAutoCompact } from "../hooks/useAutoCompact";
 
 export default function ChatWindow({
     convRequest,
@@ -86,19 +88,13 @@ export default function ChatWindow({
     const { isEnabled, disabled } = useSkills();
 
     const [prompt, setPrompt] = useState("");
-    const [isListening, setIsListening] = useState(false);
-    const [ttsEnabled, setTtsEnabled] = useState(false);
-    const [isSpeaking, setIsSpeaking] = useState(false);
     const [autoLoadError, setAutoLoadError] = useState<string | null>(null);
     const [expandedThinking, setExpandedThinking] = useState<Record<number, boolean>>({});
     const [expandedToolCalls, setExpandedToolCalls] = useState<Record<string, boolean>>({});
     const [editingIndex, setEditingIndex] = useState<number | null>(null);
     const [editDraft, setEditDraft] = useState("");
-    const [isLoadingConv, setIsLoadingConv] = useState(false);
-    const [isResumingConv, setIsResumingConv] = useState(false);
     const [toolRunning, setToolRunning] = useState(false);
     const [isImageGenerating, setIsImageGenerating] = useState(false);
-    const [conversationId, setConversationId] = useState<number | null>(null);
     const [deepThinkingEnabled, setDeepThinkingEnabled] = useState(true);
     const [chatMode, setChatMode] = useState<ChatMode>("plan");
     const [selectedSDFormat, setSelectedSDFormat] = useState<string | null>(null);
@@ -123,26 +119,12 @@ export default function ChatWindow({
         config: Partial<LlamaLaunchConfig>;
     } | null>(null);
     const [patchResults, setPatchResults] = useState<PatchResult[] | null>(null);
-
-    // ── Todo list géré par l'IA ───────────────────────────────────────────────
-    const [todoItems, setTodoItems] = useState<{ text: string; done: boolean }[]>([]);
     const [todoCollapsed, setTodoCollapsed] = useState(false);
-
-    // ── Structure de projet (persistée par conversation) ─────────────────────
-    const [projectStructure, setProjectStructure] = useState("");
     const [projectStructureCollapsed, setProjectStructureCollapsed] = useState(false);
-    const projectStructureRef = useRef("");
-    projectStructureRef.current = projectStructure;
-
-    // ── Plan de conversation (persisté par conversation) ──────────────────────
-    const [planContent, setPlanContent] = useState("");
-    const planRef = useRef("");
-    planRef.current = planContent;
 
     const lastToolSignatureRef = useRef<string | null>(null);
     const lastToolWasErrorRef = useRef<boolean>(false);
     const jsonParseErrorCountRef = useRef(0);
-    const convTitleSetRef = useRef<boolean>(false);
     const dispatchToolRef = useRef<
         | ((parsed: Record<string, string>, cfg: Partial<LlamaLaunchConfig>, forceExecute?: boolean) => Promise<void>)
         | null
@@ -152,9 +134,32 @@ export default function ChatWindow({
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const recognitionRef = useRef<{ stop: () => void } | null>(null);
     const prevStreamingRef = useRef(false);
     const autoScrollEnabledRef = useRef(true);
+
+    // ── Voice / TTS / Micro ───────────────────────────────────────────────────
+    const { isListening, isSpeaking, ttsEnabled, setTtsEnabled, speakText, handleMic, stopSpeaking } = useVoice();
+
+    // ── Chargement de conversation ────────────────────────────────────────────
+    const {
+        conversationId,
+        isLoadingConv,
+        isResumingConv,
+        setIsResumingConv,
+        convTitleSetRef,
+        todoItems,
+        setTodoItems,
+        projectStructure,
+        setProjectStructure,
+        projectStructureRef,
+        setPlanContent,
+        planRef,
+    } = useConversationLoader({
+        convRequest,
+        resetMessages,
+        modelPath,
+        onConversationReady,
+    });
 
     // ── Hooks extraits ────────────────────────────────────────────────────────
     const {
@@ -223,100 +228,12 @@ export default function ChatWindow({
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
 
-    // Démarrer ou charger une conversation selon convRequest
-    useEffect(() => {
-        resetMessages();
-        setConversationId(null);
-        lastToolSignatureRef.current = null;
-        autoScrollEnabledRef.current = true;
-        setTodoItems([]);
-        setProjectStructure("");
-        setPlanContent("");
-
-        const requestedId = convRequest?.id ?? null;
-        if (requestedId !== null) {
-            setIsLoadingConv(true);
-            Promise.all([
-                invoke<
-                    {
-                        role: string;
-                        content: string;
-                        imagePath?: string | null;
-                        displayOnly?: boolean;
-                    }[]
-                >("load_conversation_messages", {
-                    conversationId: requestedId,
-                }),
-                invoke<string>("get_project_structure", { conversationId: requestedId }).catch(() => ""),
-                invoke<string>("get_conversation_plan", { conversationId: requestedId }).catch(() => ""),
-            ])
-                .then(async ([msgs, structure, plan]) => {
-                    const llamaMsgs: LlamaMessage[] = await Promise.all(
-                        msgs.map(async (m) => {
-                            let imageDataUrl: string | undefined;
-                            if (m.imagePath) {
-                                try {
-                                    const image = await invoke<{ data_url: string }>("read_image", {
-                                        path: m.imagePath,
-                                    });
-                                    imageDataUrl = image.data_url;
-                                } catch {
-                                    imageDataUrl = undefined;
-                                }
-                            }
-
-                            return {
-                                role: m.role as "user" | "assistant" | "system",
-                                content: m.content,
-                                displayOnly: m.displayOnly ?? false,
-                                imagePath: m.imagePath ?? undefined,
-                                imageDataUrl,
-                            };
-                        }),
-                    );
-                    resetMessages(llamaMsgs);
-                    setConversationId(requestedId);
-                    convTitleSetRef.current = true;
-                    if (llamaMsgs.length > 0) setIsResumingConv(true);
-                    if (structure) setProjectStructure(structure);
-                    if (plan) setPlanContent(plan);
-                    onConversationReady?.(requestedId);
-                })
-                .catch(() => {})
-                .finally(() => setIsLoadingConv(false));
-        } else {
-            invoke<number>("start_conversation", { modelName: modelPath || "inconnu" })
-                .then((id) => {
-                    setConversationId(id);
-                    convTitleSetRef.current = false;
-                    onConversationReady?.(id);
-                })
-                .catch(() => {});
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [convRequest?.key]);
-
     // Reconstruire le contexte machine quand le mode, les skills ou la conv changent
     useEffect(() => {
         setIsContextReady(false);
         buildMachineContext();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [disabled, chatMode, convRequest?.key, modelPath, deepThinkingEnabled]);
-
-    // Hook de gestion des tool calls (dispatche outils + sauvegarde messages + TTS)
-    const speakText = (text: string) => {
-        if (!window.speechSynthesis) return;
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = "fr-FR";
-        const voices = window.speechSynthesis.getVoices();
-        const frVoice = voices.find((v) => v.lang.startsWith("fr"));
-        if (frVoice) utterance.voice = frVoice;
-        utterance.onstart = () => setIsSpeaking(true);
-        utterance.onend = () => setIsSpeaking(false);
-        utterance.onerror = () => setIsSpeaking(false);
-        window.speechSynthesis.speak(utterance);
-    };
 
     useToolCalling({
         streaming,
@@ -597,32 +514,6 @@ export default function ChatWindow({
         }
     };
 
-    const handleMic = () => {
-        if (isListening) {
-            recognitionRef.current?.stop();
-            setIsListening(false);
-            return;
-        }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
-        if (!SR) return;
-        const rec = new SR();
-        rec.lang = "fr-FR";
-        rec.continuous = false;
-        rec.interimResults = false;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        rec.onresult = (e: any) => {
-            const transcript = (e.results[0][0].transcript as string).trim();
-            setPrompt((prev) => (prev ? `${prev} ${transcript}` : transcript));
-            setIsListening(false);
-        };
-        rec.onerror = () => setIsListening(false);
-        rec.onend = () => setIsListening(false);
-        recognitionRef.current = rec;
-        rec.start();
-        setIsListening(true);
-    };
-
     const handleStopModel = async () => {
         await stopModel();
         setIsModelLoaded(false);
@@ -642,13 +533,12 @@ export default function ChatWindow({
                 ttsEnabled={ttsEnabled}
                 isSpeaking={isSpeaking}
                 onToggleVoice={() => {
-                    if (isSpeaking) {
-                        window.speechSynthesis?.cancel();
-                        setIsSpeaking(false);
-                        return;
-                    }
-                    setTtsEnabled((value) => !value);
-                }}
+                        if (isSpeaking) {
+                            stopSpeaking();
+                            return;
+                        }
+                        setTtsEnabled((value) => !value);
+                    }}
             />
             <div ref={scrollContainerRef} onScroll={updateAutoScrollState} className="flex-1 overflow-y-auto p-8">
                 <div className="mx-auto flex max-w-3xl flex-col gap-4">
@@ -834,7 +724,7 @@ export default function ChatWindow({
                     isContextReady={isContextReady}
                     handleFileSelect={handleFileSelect}
                     isListening={isListening}
-                    onToggleMic={handleMic}
+                    onToggleMic={() => handleMic((transcript) => setPrompt((prev) => (prev ? `${prev} ${transcript}` : transcript)))}
                     thinkingEnabled={thinkingEnabled}
                     onToggleThinking={handleToggleThinking}
                     deepThinkingEnabled={deepThinkingEnabled}
