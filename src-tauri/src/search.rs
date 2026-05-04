@@ -71,8 +71,8 @@ async fn search_duckduckgo(query: String, locale: Option<String>) -> Result<Vec<
         .map_err(|e| format!("Erreur lecture: {e}"))?;
 
     let document = Html::parse_document(&html_text);
-    let title_sel   = Selector::parse("a.result__a").unwrap();
-    let snippet_sel = Selector::parse("a.result__snippet, .result__snippet").unwrap();
+    let title_sel   = Selector::parse("a.result__a").expect("selecteur CSS statique valide");
+    let snippet_sel = Selector::parse("a.result__snippet, .result__snippet").expect("selecteur CSS statique valide");
 
     let titles:   Vec<_> = document.select(&title_sel).collect();
     let snippets: Vec<_> = document.select(&snippet_sel).collect();
@@ -275,3 +275,4 @@ async fn search_tavily(query: String, api_key: Option<String>) -> Result<Vec<Sea
     }).collect();
     Ok(results)
 }
+

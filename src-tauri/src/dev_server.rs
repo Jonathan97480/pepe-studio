@@ -138,7 +138,7 @@ fn run_server(
             }
 
             let cors_origin =
-                Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap();
+                Header::from_bytes("Access-Control-Allow-Origin", "*").expect("en-tete HTTP statique valide");
             let _ = req.respond(
                 Response::from_string("ok")
                     .with_status_code(StatusCode(200))
@@ -150,11 +150,11 @@ fn run_server(
         // ── OPTIONS (preflight CORS) ──
         if method == Method::Options {
             let cors_origin =
-                Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap();
+                Header::from_bytes("Access-Control-Allow-Origin", "*").expect("en-tete HTTP statique valide");
             let cors_methods =
-                Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS").unwrap();
+                Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS").expect("en-tete HTTP statique valide");
             let cors_headers =
-                Header::from_bytes("Access-Control-Allow-Headers", "Content-Type").unwrap();
+                Header::from_bytes("Access-Control-Allow-Headers", "Content-Type").expect("en-tete HTTP statique valide");
             let _ = request.respond(
                 Response::from_string("")
                     .with_status_code(StatusCode(204))
@@ -206,13 +206,13 @@ fn run_server(
                 }
 
                 let content_type =
-                    Header::from_bytes("Content-Type", mime).unwrap();
+                    Header::from_bytes("Content-Type", mime).expect("en-tete HTTP statique valide");
                 let cors_origin =
-                    Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap();
+                    Header::from_bytes("Access-Control-Allow-Origin", "*").expect("en-tete HTTP statique valide");
                 let cache_control =
-                    Header::from_bytes("Cache-Control", "no-cache, no-store, must-revalidate").unwrap();
+                    Header::from_bytes("Cache-Control", "no-cache, no-store, must-revalidate").expect("en-tete HTTP statique valide");
                 let pragma =
-                    Header::from_bytes("Pragma", "no-cache").unwrap();
+                    Header::from_bytes("Pragma", "no-cache").expect("en-tete HTTP statique valide");
                 let _ = request.respond(
                     Response::from_data(content)
                         .with_status_code(StatusCode(200))
@@ -224,7 +224,7 @@ fn run_server(
             }
             Err(_) => {
                 let cors_origin =
-                    Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap();
+                    Header::from_bytes("Access-Control-Allow-Origin", "*").expect("en-tete HTTP statique valide");
                 let _ = request.respond(
                     Response::from_string("404 Not Found")
                         .with_status_code(StatusCode(404))
@@ -324,3 +324,4 @@ pub fn get_dev_server_info(state: State<DevServerState>) -> HashMap<String, Stri
     info.insert("running".to_string(), running.to_string());
     info
 }
+

@@ -71,7 +71,9 @@ pub async fn send_llama_prompt(
         "typical_p": s.typical_p.unwrap_or(1.0),
     });
 
-    let obj = body.as_object_mut().unwrap();
+    let obj = body
+        .as_object_mut()
+        .ok_or_else(|| "Erreur interne: body JSON n'est pas un objet".to_string())?;
 
     if let Some(v) = s.penalty_last_n {
         obj.insert("penalty_last_n".into(), serde_json::json!(v));

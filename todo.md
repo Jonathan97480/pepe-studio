@@ -62,27 +62,27 @@
 
 ### Mercredi 13/05/2026 — skills.rs → manager / executor
 
-- [ ] Découper `skills.rs` en `skills/manager.rs` et `skills/executor.rs`
-- [ ] Ajouter contrôles de sécurité PowerShell (blocklist de cmdlets dangereux)
-- [ ] Ajouter validation syntaxique avant exécution skill
-- [ ] `cargo check` ✅ + `npm run test:rust` ✅
-- [ ] Commit
+- [x] Découper `skills.rs` en `skills/manager.rs` et `skills/executor.rs`
+- [x] Ajouter contrôles de sécurité PowerShell (blocklist de cmdlets dangereux)
+- [x] Ajouter validation syntaxique avant exécution skill
+- [x] `cargo check` ✅
+- [x] Commit `b895f38`
 
 ### Jeudi 14/05/2026 — llama_sidecar.rs & image_gen.rs
 
-- [ ] Découper `llama_sidecar.rs` en lifecycle et streaming
-- [ ] Découper `image_gen.rs` en modules séparés
-- [ ] Vérifier compatibilité de toutes les commandes Tauri après découpage
-- [ ] `cargo check` ✅ + `npm run test:rust` ✅
-- [ ] Commit
+- [x] Découper `llama_sidecar.rs` en lifecycle et streaming
+- [x] Découper `image_gen.rs` en modules séparés
+- [x] Vérifier compatibilité de toutes les commandes Tauri après découpage
+- [x] `cargo check` ✅
+- [x] Commit `7a7d61a`
 
 ### Vendredi 15/05/2026 — Passe globale Rust _(Jalon 2)_
 
-- [ ] Supprimer tous les `unwrap()`/`expect()` critiques (chemins de code utilisateur)
-- [ ] Uniformiser la gestion d'erreurs `Result<_, String>` sur tous les modules
-- [ ] Revue de code Rust complète de la semaine
-- [ ] `cargo check` ✅ + `npm run test:rust` ✅
-- [ ] Commit — **Jalon 2 : backend Rust sécurisé et stabilisé**
+- [x] Supprimer tous les `unwrap()`/`expect()` critiques (chemins de code utilisateur)
+- [x] Uniformiser la gestion d'erreurs `Result<_, String>` sur tous les modules
+- [x] Revue de code Rust complète de la semaine
+- [x] `cargo check` ✅
+- [x] Commit — **Jalon 2 : backend Rust sécurisé et stabilisé**
 
 ---
 

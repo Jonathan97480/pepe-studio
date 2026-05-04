@@ -199,7 +199,7 @@ pub fn create_mcp_server(
     fs::write(
         &meta_path,
         serde_json::to_string_pretty(&json!({ "name": safe_name, "description": description }))
-            .unwrap(),
+            .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
 

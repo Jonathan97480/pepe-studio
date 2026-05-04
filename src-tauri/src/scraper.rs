@@ -85,7 +85,7 @@ fn parse_html(url: &str, html_text: &str, mode: &str) -> Result<ScrapedPage, Str
     let document = Html::parse_document(html_text);
 
     // Title
-    let title_sel = Selector::parse("title").unwrap();
+    let title_sel = Selector::parse("title").expect("selecteur CSS statique valide");
     let title = document
         .select(&title_sel)
         .next()
@@ -93,8 +93,8 @@ fn parse_html(url: &str, html_text: &str, mode: &str) -> Result<ScrapedPage, Str
         .unwrap_or_default();
 
     // Meta description
-    let meta_sel = Selector::parse("meta[name='description']").unwrap();
-    let meta_og_sel = Selector::parse("meta[property='og:description']").unwrap();
+    let meta_sel = Selector::parse("meta[name='description']").expect("selecteur CSS statique valide");
+    let meta_og_sel = Selector::parse("meta[property='og:description']").expect("selecteur CSS statique valide");
     let description = document
         .select(&meta_sel)
         .next()
@@ -105,7 +105,7 @@ fn parse_html(url: &str, html_text: &str, mode: &str) -> Result<ScrapedPage, Str
         .to_string();
 
     // Headings h1, h2, h3
-    let h_sel = Selector::parse("h1, h2, h3").unwrap();
+    let h_sel = Selector::parse("h1, h2, h3").expect("selecteur CSS statique valide");
     let headings: Vec<ScrapeHeading> = document
         .select(&h_sel)
         .filter_map(|e| {
@@ -120,7 +120,7 @@ fn parse_html(url: &str, html_text: &str, mode: &str) -> Result<ScrapedPage, Str
         .collect();
 
     // Links
-    let a_sel = Selector::parse("a[href]").unwrap();
+    let a_sel = Selector::parse("a[href]").expect("selecteur CSS statique valide");
     let links: Vec<ScrapeLink> = document
         .select(&a_sel)
         .filter_map(|e| {
@@ -135,8 +135,8 @@ fn parse_html(url: &str, html_text: &str, mode: &str) -> Result<ScrapedPage, Str
         .collect();
 
     // Body text — exclude scripts, styles, nav, footer
-    let body_sel = Selector::parse("body").unwrap();
-    let skip_sel = Selector::parse("script, style, nav, footer, header, aside").unwrap();
+    let body_sel = Selector::parse("body").expect("selecteur CSS statique valide");
+    let skip_sel = Selector::parse("script, style, nav, footer, header, aside").expect("selecteur CSS statique valide");
 
     let raw_text = if let Some(body) = document.select(&body_sel).next() {
         // Get all text nodes, skipping excluded elements
@@ -308,3 +308,4 @@ async fn scrape_js(app: AppHandle, url: String) -> Result<ScrapedPage, String> {
         mode: "js".to_string(),
     })
 }
+
