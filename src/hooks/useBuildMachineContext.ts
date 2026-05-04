@@ -2,6 +2,8 @@ import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { loadBuiltinDisabled } from "../lib/builtinTools";
 import { buildCompactToolCatalog } from "../lib/toolDispatchUtils";
+import { formatGpuString, type HardwareInfo } from "./useHardwareInfo";
+import { getToolGroupId } from "../lib/toolGroupResolver";
 import type { ChatMode } from "../lib/chatUtils";
 
 interface UseBuildMachineContextOptions {
@@ -26,17 +28,9 @@ export function useBuildMachineContext({
 
     const buildMachineContext = useCallback(async () => {
         try {
-            const hw = await invoke<{
-                total_ram_gb: number;
-                cpu_threads: number;
-                gpu_name: string;
-                gpu_vram_gb: number;
-                has_dedicated_gpu: boolean;
-            }>("get_hardware_info");
+            const hw = await invoke<HardwareInfo>("get_hardware_info");
             const os = navigator.platform ?? "inconnu";
-            const gpu = hw.has_dedicated_gpu
-                ? `${hw.gpu_name} (${hw.gpu_vram_gb.toFixed(1)} Go VRAM)`
-                : "GPU intégré / non détecté";
+            const gpu = formatGpuString(hw);
 
             let skillsList = "";
             try {
@@ -131,67 +125,7 @@ export function useBuildMachineContext({
                 "save_fact",
                 "get_tool_doc",
             ]) {
-                const groupId =
-                    id.startsWith("terminal") ||
-                    id === "cmd" ||
-                    id === "list_terminals" ||
-                    id === "get_terminal_history" ||
-                    id === "close_terminal" ||
-                    id === "create_terminal"
-                        ? "terminal"
-                        : id === "get_hardware_info"
-                          ? "terminal"
-                          : [
-                                  "read_image",
-                                  "read_image_batch",
-                                  "list_folder_images",
-                                  "save_image",
-                                  "download_image",
-                                  "generate_image",
-                                  "list_sd_models",
-                              ].includes(id)
-                            ? "images"
-                            : id.startsWith("read_") ||
-                                id === "analyze_folder" ||
-                                id === "write_file" ||
-                                id === "patch_file" ||
-                                id === "batch_rename" ||
-                                id === "list_folder_pdfs" ||
-                                id === "list_folder_files" ||
-                                id === "list_folder_images"
-                              ? "files"
-                              : id.includes("skill")
-                                ? "skills"
-                                : id === "http_request"
-                                  ? "http"
-                                  : id === "search_web"
-                                    ? "search_web"
-                                    : id === "scrape_url"
-                                      ? "scrape_url"
-                                      : [
-                                              "open_browser",
-                                              "start_dev_server",
-                                              "stop_dev_server",
-                                              "get_browser_errors",
-                                              "get_dev_server_info",
-                                          ].includes(id)
-                                        ? "browser"
-                                        : ["context7-search", "context7-docs"].includes(id)
-                                          ? "context7"
-                                          : [
-                                                  "create_mcp_server",
-                                                  "start_mcp_server",
-                                                  "call_mcp_tool",
-                                                  "list_mcp_servers",
-                                              ].includes(id)
-                                            ? "mcp"
-                                            : ["search_conversation"].includes(id)
-                                              ? "memory"
-                                              : ["get_plan", "save_plan", "set_todo", "check_todo"].includes(id)
-                                                ? "planning"
-                                                : ["save_fact"].includes(id)
-                                                  ? "profile"
-                                                  : null;
+                const groupId = getToolGroupId(id);
                 if (
                     !groupId ||
                     toolOn(groupId) ||

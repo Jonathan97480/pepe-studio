@@ -102,11 +102,12 @@
 
 ### Mardi 19/05/2026 — useBuildMachineContext.ts
 
-- [ ] Découper en hooks spécialisés (hardware detection, GPU config)
-- [ ] Isoler détection hardware et configuration GPU
-- [ ] Ajouter tests unitaires de calcul/config
-- [ ] `npm run test:web` ✅
-- [ ] Commit
+- [x] Extraire `useHardwareInfo.ts` — hook + `HardwareInfo` interface + `formatGpuString`
+- [x] Extraire `src/lib/toolGroupResolver.ts` — `getToolGroupId(id)` pure function
+- [x] Simplifier `useBuildMachineContext.ts` (1181 → 1115 lignes)
+- [x] Ajouter tests unitaires `toolGroupResolver.test.ts` (40 cas)
+- [x] `npm run test:web` ✅ — 65 tests pass
+- [x] Commit
 
 ### Mercredi 20/05/2026 — useToolCalling.ts
 
