@@ -30,15 +30,15 @@
 
 ## Vendredi 08/05/2026 — Sprint Refactor J3 : Découpage db.rs _(Jalon 1)_
 
-- [ ] Analyser `db.rs` et définir les modules cibles : `db/models.rs`, `db/documents.rs`, `db/conversations.rs`, `db/schema.rs`
-- [ ] Extraire gestion des model_configs dans `db/models.rs`
-- [ ] Extraire gestion des documents et chunks dans `db/documents.rs`
-- [ ] Extraire gestion des conversations et messages dans `db/conversations.rs`
-- [ ] Extraire init schema et migrations dans `db/schema.rs`
-- [ ] Conserver signatures publiques compatibles avec `main.rs`
-- [ ] `cargo check` ✅ après chaque extraction
-- [ ] `npm run test:rust` ✅
-- [ ] Commit — **Jalon 1 : api_server.rs et db.rs découpés**
+- [x] Analyser `db.rs` et définir les modules cibles : `db/models.rs`, `db/documents.rs`, `db/conversations.rs`, `db/schema.rs`
+- [x] Extraire gestion des model_configs dans `db/models.rs`
+- [x] Extraire gestion des documents et chunks dans `db/documents.rs`
+- [x] Extraire gestion des conversations et messages dans `db/conversations.rs`
+- [x] Extraire init schema et migrations dans `db/schema.rs`
+- [x] Conserver signatures publiques compatibles avec `main.rs`
+- [x] `cargo check` ✅ après chaque extraction
+- [x] `npm run test:rust` ✅
+- [x] Commit — **Jalon 1 : api_server.rs et db.rs découpés**
 
 ---
 
