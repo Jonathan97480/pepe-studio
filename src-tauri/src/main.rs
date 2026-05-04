@@ -5,8 +5,10 @@
 )]
 
 mod api_server;
+mod chat_api;
 mod db;
 mod dev_server;
+mod health;
 mod http_client;
 mod hw_info;
 mod image_gen;
@@ -14,10 +16,13 @@ mod llama_sidecar;
 mod logger;
 mod mcp;
 mod model_metadata;
+mod models_api;
 mod scraper;
 mod search;
 mod skills;
+mod state;
 mod terminal_manager;
+mod tools_api;
 
 use api_server::{get_api_server_info, start_api_server, stop_api_server, ApiServerState};
 use db::{
