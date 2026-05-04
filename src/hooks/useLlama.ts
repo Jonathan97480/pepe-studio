@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useRef, useState } from "react";
+import {
+    detectRepetitionLoop,
+    isCorruptedThinkingChunk,
+    normalizeVisibleAssistantText,
+} from "../lib/streamUtils";
 import { invoke as apiInvoke } from "@tauri-apps/api/tauri";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { buildLlamaArgs, LlamaLaunchConfig } from "../lib/llamaWrapper";
@@ -118,67 +123,8 @@ export function useLlama() {
         console.log("[useLlama-debug]", message);
     }, []);
 
-    const normalizeVisibleAssistantText = useCallback((text: string): string => {
-        return text
-            .replace(/<tool>[\s\S]*?<\/tool>/gi, " ")
-            .replace(/<patch_file[\s\S]*?<\/patch_file>/gi, " ")
-            .replace(/<write_file[\s\S]*?<\/write_file>/gi, " ")
-            .replace(/<think>[\s\S]*?<\/think>/gi, " ")
-            .replace(/\[start thinking\]|\[end thinking\]/gi, " ")
-            .replace(/<unused\d+>/g, " ")
-            .replace(/[{}[\]<>`"\\/_|=:~]+/g, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-    }, []);
-
-    const isCorruptedThinkingChunk = useCallback((text: string): boolean => {
-        const trimmed = text.trim();
-        if (!trimmed) return false;
-
-        const visibleChars = Array.from(trimmed).filter((ch) => !/\s/.test(ch));
-        if (visibleChars.length < 12) return false;
-
-        const questionLikeCount = visibleChars.filter((ch) => ch === "?" || ch === "�" || ch === "\uFFFD").length;
-        const alphaNumCount = visibleChars.filter((ch) => /[\p{L}\p{N}]/u.test(ch)).length;
-        const punctuationOnly = alphaNumCount === 0;
-        const questionRatio = questionLikeCount / visibleChars.length;
-
-        return punctuationOnly || (questionLikeCount >= 16 && questionRatio >= 0.55);
-    }, []);
-
-    /** Détecte si le texte assistant visible contient une vraie séquence répétée en boucle */
-    const detectRepetitionLoop = useCallback(
-        (buffer: string): boolean => {
-            const normalized = normalizeVisibleAssistantText(buffer);
-            if (normalized.length < 260) return false;
-            const alphaChars = (normalized.match(/[A-Za-zÀ-ÿ]/g) ?? []).length;
-            if (alphaChars < 180) return false;
-
-            const tail = normalized.slice(-700);
-            for (let len = 30; len <= 120; len++) {
-                const pattern = tail.slice(-len).trim();
-                if (pattern.length < 24) continue;
-                const wordCount = pattern.split(/\s+/).filter(Boolean).length;
-                if (wordCount < 4) continue;
-
-                let count = 0;
-                let pos = tail.length - len;
-                while (pos >= 0) {
-                    const segment = tail.slice(pos, pos + len).trim();
-                    if (segment === pattern) {
-                        count++;
-                        pos -= len;
-                    } else {
-                        break;
-                    }
-                }
-                if (count >= 4) return true;
-            }
-            return false;
-        },
-        [normalizeVisibleAssistantText],
-    );
-
+    // normalizeVisibleAssistantText, isCorruptedThinkingChunk, detectRepetitionLoop
+    // sont des fonctions pures importees depuis src/lib/streamUtils.ts
     const unlistenRef = useRef<{ stream?: UnlistenFn; done?: UnlistenFn; error?: UnlistenFn; usage?: UnlistenFn }>({});
 
     useEffect(() => {
@@ -571,7 +517,7 @@ export function useLlama() {
             unlistenError?.();
             unlistenUsage?.();
         };
-    }, [debugLog, detectRepetitionLoop, isCorruptedThinkingChunk, normalizeVisibleAssistantText]);
+    }, [debugLog]);
 
     const loadModel = useCallback(async (config: LlamaLaunchConfig) => {
         setError(null);
