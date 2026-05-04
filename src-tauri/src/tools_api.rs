@@ -757,9 +757,29 @@ pub fn ensure_tools_are_available(req_body: &mut Value) {
     req_body["tool_choice"] = json!("auto");
 }
 
-// ── Dispatcher d'outils ───────────────────────────────────────────────────────
+// ── Dispatcher d'outils ─────────────────────────────────────────────────────
 
+/// Point d'entrée public — enveloppe `execute_tool_inner` avec logs d'audit.
+/// Chaque appel d'outil est tracé dans AppLogger : tool, args sanitisés, ok/err.
 pub async fn execute_tool(state: &ProxyState, name: &str, args: &Value) -> Result<Value, String> {
+    let result = execute_tool_inner(state, name, args).await;
+    // Audit log (centralisé, jamais de données sensibles en clair)
+    let logger = state.app_handle.state::<AppLogger>();
+    let (level, outcome) = match &result {
+        Ok(_) => ("INFO", "ok".to_string()),
+        Err(e) => ("WARN", format!("err: {}", &e[..e.len().min(200)])),
+    };
+    let args_display = sanitize_args_for_log(name, args);
+    logger.log_entry(
+        level.into(),
+        "tool_audit".into(),
+        format!("tool={name} args={args_display} result={outcome}"),
+    );
+    result
+}
+
+/// Dispatcher interne — appelé uniquement via `execute_tool`.
+async fn execute_tool_inner(state: &ProxyState, name: &str, args: &Value) -> Result<Value, String> {
     match name {
         "get_hardware_info" => {
             let info = get_hardware_info()?;
@@ -786,22 +806,29 @@ pub async fn execute_tool(state: &ProxyState, name: &str, args: &Value) -> Resul
         }
         "cmd" => {
             let command = required_string(args, "command")?;
+            // Bloquer null bytes — vecteur d'injection courant
+            if command.contains('\0') {
+                return Err("Commande invalide : null byte détecté".into());
+            }
             let out = run_shell_command(command)?;
             Ok(json!({ "output": out }))
         }
         "read_file" => {
             let path = required_string(args, "path")?;
+            validate_path(&path)?;
             let content = read_file_content(path)?;
             Ok(json!({ "content": content }))
         }
         "write_file" => {
             let path = required_string(args, "path")?;
+            validate_path(&path)?;
             let content = required_string(args, "content")?;
             let out = write_file(path, content)?;
             Ok(json!({ "message": out }))
         }
         "patch_file" => {
             let path = required_string(args, "path")?;
+            validate_path(&path)?;
             let search = required_string(args, "search")?;
             let replace = required_string(args, "replace")?;
             let out = patch_file(path, search, replace)?;
@@ -809,6 +836,7 @@ pub async fn execute_tool(state: &ProxyState, name: &str, args: &Value) -> Resul
         }
         "list_folder_files" => {
             let folder = required_string(args, "folder")?;
+            validate_path(&folder)?;
             let recursive = opt_bool(args, "recursive");
             let extensions = opt_string_vec(args, "extensions")?;
             let out = list_folder_files(folder, recursive, extensions)?;
@@ -816,28 +844,37 @@ pub async fn execute_tool(state: &ProxyState, name: &str, args: &Value) -> Resul
         }
         "list_folder_images" => {
             let folder = required_string(args, "folder")?;
+            validate_path(&folder)?;
             let recursive = opt_bool(args, "recursive");
             let out = list_folder_images(folder, recursive)?;
             serde_json::to_value(out).map_err(|e| e.to_string())
         }
         "list_folder_pdfs" => {
             let folder = required_string(args, "folder")?;
+            validate_path(&folder)?;
             let recursive = opt_bool(args, "recursive");
             let out = list_folder_pdfs(folder, recursive)?;
             serde_json::to_value(out).map_err(|e| e.to_string())
         }
         "read_image" => {
             let path = required_string(args, "path")?;
+            validate_path(&path)?;
             let out = read_image(path)?;
             serde_json::to_value(out).map_err(|e| e.to_string())
         }
         "read_image_batch" => {
             let paths = required_string_vec(args, "paths")?;
+            for p in &paths {
+                validate_path(p)?;
+            }
             let out = read_image_batch(paths);
             serde_json::to_value(out).map_err(|e| e.to_string())
         }
         "read_pdf_batch" => {
             let paths = required_string_vec(args, "paths")?;
+            for p in &paths {
+                validate_path(p)?;
+            }
             let out = read_pdf_batch(paths);
             serde_json::to_value(out).map_err(|e| e.to_string())
         }
@@ -899,6 +936,7 @@ pub async fn execute_tool(state: &ProxyState, name: &str, args: &Value) -> Resul
         }
         "inspect_model_metadata" => {
             let model_path = required_string(args, "model_path")?;
+            validate_path(&model_path)?;
             let out = inspect_model_metadata(state.app_handle.clone(), model_path)?;
             serde_json::to_value(out).map_err(|e| e.to_string())
         }
@@ -1028,9 +1066,14 @@ pub async fn execute_tool(state: &ProxyState, name: &str, args: &Value) -> Resul
             serde_json::to_value(out).map_err(|e| e.to_string())
         }
         "terminal_exec" => {
+            let command = required_string(args, "command")?;
+            // Null bytes dans une commande terminal = vecteur d'injection
+            if command.contains('\0') {
+                return Err("Commande invalide : null byte détecté".into());
+            }
             let out = terminal_exec(
                 required_string(args, "terminal_id")?,
-                required_string(args, "command")?,
+                command,
                 state.app_handle.state::<TerminalManagerState>(),
             )?;
             serde_json::to_value(out).map_err(|e| e.to_string())
@@ -1105,6 +1148,73 @@ pub async fn execute_tool(state: &ProxyState, name: &str, args: &Value) -> Resul
         }
         _ => Err(format!("Outil non supporté par le proxy API: {name}")),
     }
+}
+
+// ── Sécurité : validation de chemin ──────────────────────────────────────────
+
+/// Valide un chemin fichier avant toute opération FS.
+///
+/// Bloque :
+///  - les null bytes (vecteur d'injection / truncation)
+///  - les composants `..` (path traversal)
+///  - les chemins trop longs (> 4096 chars)
+///
+/// Ne restreint PAS les chemins absolus car l'app a besoin d'accéder
+/// à des chemins arbitraires (workspace utilisateur). Les restrictions
+/// de scope sont appliquées dans `tauri.conf.json` (fs scope).
+pub fn validate_path(path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("Chemin vide".into());
+    }
+    if path.len() > 4096 {
+        return Err(format!("Chemin trop long ({} chars, max 4096)", path.len()));
+    }
+    if path.contains('\0') {
+        return Err("Chemin invalide : null byte détecté".into());
+    }
+    // Bloquer la traversée de répertoires via composants ..
+    // Vérification sur les deux séparateurs (Unix et Windows)
+    for component in path.split(['/', '\\']) {
+        if component == ".." {
+            return Err(format!(
+                "Chemin refusé : composant '..' détecté dans '{}'",
+                path
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ── Audit log helpers ─────────────────────────────────────────────────────────
+
+/// Construit une représentation des args sûre pour les logs.
+/// - Tronque les valeurs longues (content, data_url…)
+/// - Masque les champs sensibles (api_key, headers)
+fn sanitize_args_for_log(tool: &str, args: &Value) -> String {
+    let sensitive_keys = [
+        "api_key", "headers", "content", "data_url", "replace", "search",
+    ];
+    let mut out = std::collections::BTreeMap::new();
+    if let Some(obj) = args.as_object() {
+        for (k, v) in obj {
+            if sensitive_keys.contains(&k.as_str()) {
+                let len = v.as_str().map(|s| s.len()).unwrap_or(0);
+                out.insert(k.clone(), format!("[{} chars]", len));
+            } else {
+                let s = v.to_string();
+                if s.len() > 120 {
+                    out.insert(k.clone(), format!("{}…", &s[..120]));
+                } else {
+                    out.insert(k.clone(), s);
+                }
+            }
+        }
+    }
+    // Pour les outils sans args, retourner le nom seul
+    if out.is_empty() {
+        return format!("{tool}()");
+    }
+    format!("{out:?}")
 }
 
 // ── Helpers d'extraction de paramètres JSON ───────────────────────────────────
