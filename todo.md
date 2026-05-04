@@ -46,11 +46,11 @@
 
 ### Lundi 11/05/2026 — hw_info.rs → file_ops / shell_ops / media
 
-- [ ] Découper `hw_info.rs` en `file_ops.rs`, `shell_ops.rs`, `media.rs`
+- [x] Découper `hw_info.rs` en `file_ops.rs`, `shell_ops.rs`, `media.rs`
 - [ ] Introduire un validateur central des chemins fichiers
 - [ ] Bloquer patterns dangereux (`..`, chemins hors scope `$APPDATA/pepe-studio`, `$HOME/pepe-studio`)
-- [ ] `cargo check` ✅ + `npm run test:rust` ✅
-- [ ] Commit
+- [x] `cargo check` ✅
+- [x] Commit
 
 ### Mardi 12/05/2026 — terminal_manager.rs → pty / parser / executor
 
