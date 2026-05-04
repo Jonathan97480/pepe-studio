@@ -54,11 +54,11 @@
 
 ### Mardi 12/05/2026 — terminal_manager.rs → pty / parser / executor
 
-- [ ] Découper `terminal_manager.rs` en `pty.rs`, `parser.rs`, `executor.rs`
-- [ ] Durcir `parse_command` et validation des commandes PTY
-- [ ] Ajouter journalisation des exécutions terminal (commande, exit code, durée)
-- [ ] `cargo check` ✅ + `npm run test:rust` ✅
-- [ ] Commit
+- [x] Découper `terminal_manager.rs` en `terminal_parser.rs`, `terminal_pty.rs`
+- [x] Durcir `parse_command` et validation des commandes PTY
+- [x] Ajouter journalisation des exécutions terminal (commande, exit code, durée)
+- [x] `cargo check` ✅
+- [x] Commit
 
 ### Mercredi 13/05/2026 — skills.rs → manager / executor
 
