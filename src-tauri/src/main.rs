@@ -13,6 +13,7 @@ mod health;
 mod http_client;
 mod hw_info;
 mod image_gen;
+#[path = "llama/mod.rs"]
 mod llama_sidecar;
 mod logger;
 mod mcp;
