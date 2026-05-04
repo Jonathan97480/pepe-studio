@@ -111,26 +111,30 @@
 
 ### Mercredi 20/05/2026 — useToolCalling.ts
 
-- [ ] Découper en validator / executor
-- [ ] Vérifier anti-loop et permissions outils
-- [ ] Ajouter tests sur cas limites d'exécution
-- [ ] `npm run test:web` ✅
-- [ ] Commit
+- [x] Extraire `src/lib/toolJsonParser.ts` — `parseToolBlock` (cascade JSON.parse → extractWriteFileTool → extractSimpleTool)
+- [x] Extraire `src/lib/toolParseErrors.ts` — `buildToolParseError` (8 messages contextuels)
+- [x] Simplifier `useToolCalling.ts` (imports ajoutés, `sanitizeLlmJson`/`extractSimpleTool`/`extractWriteFileTool` supprimés)
+- [x] `npm run test:web` ✅ — 79 tests pass
+- [x] Commit `29fd71d`
 
 ### Jeudi 21/05/2026 — useLlama.ts & toolWebHandlers.ts
 
-- [ ] Découper `useLlama.ts` : streaming, parsing, orchestration
-- [ ] Découper `toolWebHandlers.ts`
-- [ ] Vérifier stabilité du flux chat
-- [ ] `npm run test:web` ✅
-- [ ] Commit
+- [x] Extraire `src/lib/sdPromptUtils.ts` (logique SD pure)
+- [x] Extraire `src/lib/streamUtils.ts` (normalizeVisibleAssistantText, isCorruptedThinkingChunk, detectRepetitionLoop)
+- [x] Réduire `toolWebHandlers.ts` 956 → 713 lignes
+- [x] Remplacer 3 `useCallback` dans `useLlama.ts` par imports directs
+- [x] `npm run test:web` ✅ — 79 tests pass
+- [x] Commit `265e16f`
 
 ### Vendredi 22/05/2026 — ChatWindow.tsx + lint final _(Jalon 3)_
 
-- [ ] Découper `ChatWindow.tsx` (> 300 lignes → sous-composants)
-- [ ] Nettoyer tous les composants > 300 lignes restants
-- [ ] Passe `npm run lint:fix` + `npm run typecheck` complète
-- [ ] Commit — **Jalon 3 : frontend volumineux découpé**
+- [x] Extraire `useConversationLoader.ts` (chargement conv DB + état conversation)
+- [x] Extraire `useVoice.ts` (TTS + micro + speakText)
+- [x] Réduire `ChatWindow.tsx` 854 → 746 lignes
+- [x] Corriger `ModelSettingsContext.tsx` — lazy init sdModelPath (lint error)
+- [x] `npm run lint:fix` ✅ — 0 erreurs
+- [x] `npm run test:web` ✅ — 79 tests pass
+- [x] Commit `f522ce5` — **Jalon 3 : frontend volumineux découpé**
 
 ---
 
