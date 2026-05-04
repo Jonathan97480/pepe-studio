@@ -17,3 +17,6 @@ src-tauri/target/
 # Dossiers binaires lourds
 llama.cpp/
 models/
+# Exception : composants React dans src/components/models/
+!src/components/models/
+!src/components/models/**
