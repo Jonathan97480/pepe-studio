@@ -1,7 +1,9 @@
-import React, { useEffect } from "react";
+﻿import React, { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { hasPatchBlocks, applyAllPatches, type PatchResult } from "../lib/skillPatcher";
-import { normalizeToolTags, sanitizeLlmJson, extractSimpleTool, extractWriteFileTool } from "../lib/chatUtils";
+import { normalizeToolTags } from "../lib/chatUtils";
+import { parseToolBlock } from "../lib/toolJsonParser";
+import { buildToolParseError } from "../lib/toolParseErrors";
 import { describeTool, isActionTool, resolveToolDoc } from "../lib/toolDispatchUtils";
 import {
     handleAnalyzeFolder,
@@ -250,28 +252,10 @@ export function useToolCalling({
                     const allToolMatches = [...normalizedContent.matchAll(/<tool>\s*([\s\S]*?)\s*<\/tool>/g)];
                     const toolMatch = allToolMatches.length > 0 ? allToolMatches[0] : null;
                     if (toolMatch) {
-                        let parsed: Record<string, string> | null = null;
-                        let parseError: unknown = null;
-                        try {
-                            parsed = JSON.parse(sanitizeLlmJson(toolMatch[1]));
-                        } catch (jsonErr) {
-                            parseError = jsonErr;
-                            if (toolMatch[1].includes('"write_file"')) {
-                                const extracted = extractWriteFileTool(toolMatch[1]);
-                                if (extracted) {
-                                    parsed = extracted as unknown as Record<string, string>;
-                                    parseError = null;
-                                }
-                            } else {
-                                const extracted = extractSimpleTool(toolMatch[1]);
-                                if (extracted) {
-                                    parsed = extracted as unknown as Record<string, string>;
-                                    parseError = null;
-                                }
-                            }
-                        }
+                        const { parsed, error: parseError } = parseToolBlock(toolMatch[1]);
                         if (parseError !== null || parsed === null) {
                             jsonParseErrorCountRef.current += 1;
+                            const attempt = jsonParseErrorCountRef.current;
                             const config: Partial<LlamaLaunchConfig> = {
                                 modelPath,
                                 temperature,
@@ -284,82 +268,12 @@ export function useToolCalling({
                                     : systemPrompt,
                             };
                             setToolRunning(true);
-                            let errMsg: string;
-                            const isWriteFile = toolMatch[1].includes('"write_file"');
-                            const isBatchRename = toolMatch[1].includes('"batch_rename"');
-                            const isReadPdfBatch = toolMatch[1].includes('"read_pdf_batch"');
-                            if (jsonParseErrorCountRef.current <= 2) {
-                                if (isBatchRename) {
-                                    errMsg =
-                                        `[Erreur batch_rename ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â JSON invalide ou trop long]\n` +
-                                        `Le JSON de ton batch_rename est mal formÃƒÆ’Ã‚Â© (${parseError}).\n` +
-                                        `SOLUTION OBLIGATOIRE : Divise les renommages en 2 appels sÃƒÆ’Ã‚Â©parÃƒÆ’Ã‚Â©s de 15 fichiers max :\n` +
-                                        `Appel 1 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ <tool>{"batch_rename": [{"from": "...", "to": "..."}, ...]}</tool>  ÃƒÂ¢Ã¢â‚¬Â Ã‚Â 15 premiers\n` +
-                                        `Appel 2 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ <tool>{"batch_rename": [{"from": "...", "to": "..."}, ...]}</tool>  ÃƒÂ¢Ã¢â‚¬Â Ã‚Â 15 suivants\n` +
-                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Format TABLEAU NATIF obligatoire ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â PAS de guillemets supplÃƒÆ’Ã‚Â©mentaires autour du tableau.\n` +
-                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Aucun guillemet ÃƒÆ’Ã‚Â  ÃƒÆ’Ã‚Â©chapper dans les chemins de fichiers.`;
-                                } else if (isReadPdfBatch) {
-                                    errMsg =
-                                        `[Erreur read_pdf_batch ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â JSON invalide]\n` +
-                                        `Le JSON est mal formÃƒÆ’Ã‚Â© (${parseError}).\n` +
-                                        `SOLUTION : Utilise un tableau natif JSON (PAS une chaÃƒÆ’Ã‚Â®ne sÃƒÆ’Ã‚Â©rialisÃƒÆ’Ã‚Â©e) :\n` +
-                                        `<tool>{"read_pdf_batch": ["E:/chemin/fichier1.pdf", "E:/chemin/fichier2.pdf", ...]}</tool>\n` +
-                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Maximum 30 chemins par appel. Si > 30 fichiers, fais 2 appels sÃƒÆ’Ã‚Â©parÃƒÆ’Ã‚Â©s.`;
-                                } else if (isWriteFile) {
-                                    errMsg =
-                                        `[Erreur write_file ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â FORMAT TAG OBLIGATOIRE]\n` +
-                                        `ARRÃƒÆ’Ã…Â TE toute tentative JSON pour write_file. Utilise EXACTEMENT ce format (commence par < pas par {) :\n` +
-                                        `\n` +
-                                        `<write_file path="D:/projetavenire/index.html">\n` +
-                                        `<!DOCTYPE html>\n` +
-                                        `<html>...contenu complet ici...</html>\n` +
-                                        `</write_file>\n` +
-                                        `\n` +
-                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â La balise DOIT commencer par le caractÃƒÆ’Ã‚Â¨re < (chevron), PAS par { (accolade).\n` +
-                                        `ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â NE pas envelopper dans <tool>...</tool> ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â le format TAG est DIRECT, sans wrapper.\n` +
-                                        `Adapte le path avec le vrai chemin du fichier ÃƒÆ’Ã‚Â  crÃƒÆ’Ã‚Â©er.`;
-                                } else {
-                                    errMsg =
-                                        `[Erreur JSON dans <tool>] Le JSON est invalide (${parseError}).\n` +
-                                        `Cause : les guillemets dans le champ content ne sont PAS echappes.\n` +
-                                        `Regles absolues :\n` +
-                                        `  1. Remplace CHAQUE guillemet dans content par backslash+guillemet (\\\")\n` +
-                                        `  2. Remplace chaque saut de ligne par backslash+n (\\n)\n` +
-                                        `  3. NE mets AUCUN vrai saut de ligne dans la valeur JSON\n` +
-                                        `Exemple valide : {"create_skill":"x","content":"Write-Host \\\"bonjour\\\""}\n` +
-                                        `Reemet le <tool> avec le JSON corrige.`;
-                                }
-                            } else {
-                                jsonParseErrorCountRef.current = 0;
-                                if (isBatchRename) {
-                                    errMsg =
-                                        `[Erreur batch_rename persistante ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â SPLIT OBLIGATOIRE]\n` +
-                                        `Impossible de parser le JSON. RÃƒÆ’Ã‹â€ GLE : max 10 fichiers par appel batch_rename.\n` +
-                                        `GÃƒÆ’Ã‚Â©nÃƒÆ’Ã‚Â¨re autant d'appels <tool>{"batch_rename": [...]}</tool> que nÃƒÆ’Ã‚Â©cessaire (10 par appel).`;
-                                } else if (isReadPdfBatch) {
-                                    errMsg =
-                                        `[Erreur read_pdf_batch persistante ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â SPLIT OBLIGATOIRE]\n` +
-                                        `Impossible de parser le JSON. RÃƒÆ’Ã‚Â©duis ÃƒÆ’Ã‚Â  10 chemins maximum par appel.\n` +
-                                        `<tool>{"read_pdf_batch": ["chemin1.pdf", ..., "chemin10.pdf"]}</tool>`;
-                                } else if (isWriteFile) {
-                                    errMsg =
-                                        `[ECHEC REPEATED write_file ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â FALLBACK CMD OBLIGATOIRE]\n` +
-                                        `Le format TAG n'a pas fonctionnÃƒÆ’Ã‚Â©. Ecris le fichier via PowerShell cmd ÃƒÆ’Ã‚Â  la place :\n` +
-                                        `\n` +
-                                        `<tool>{"cmd": "New-Item -ItemType Directory -Force 'D:/projetavenire'; Set-Content -Path 'D:/projetavenire/index.html' -Encoding UTF8 -Value '<!DOCTYPE html><html><head><title>Page</title></head><body><h1>Pepe-Studio</h1></body></html>'"}</tool>\n` +
-                                        `\n` +
-                                        `Adapte le -Path et le -Value avec le vrai contenu. NE retente PAS write_file.`;
-                                } else {
-                                    errMsg =
-                                        `[Erreur JSON persistante apres plusieurs tentatives] Nouvelle strategie OBLIGATOIRE :\n` +
-                                        `Remplace TOUS les guillemets doubles dans ton script PowerShell par des apostrophes simples (').\n` +
-                                        `PowerShell accepte les deux. Exemple : Write-Host 'Bonjour' au lieu de Write-Host "Bonjour".\n` +
-                                        `Reemet le <tool> create_skill avec uniquement des apostrophes simples dans content.`;
-                                }
-                            }
+                            const errMsg = buildToolParseError(toolMatch[1], parseError, attempt);
+                            if (attempt > 2) jsonParseErrorCountRef.current = 0;
                             sendPrompt(errMsg, config).finally(() => setToolRunning(false));
                             return;
                         }
+                        jsonParseErrorCountRef.current = 0;
                         jsonParseErrorCountRef.current = 0;
 
                         setToolRunning(true);
