@@ -21,19 +21,19 @@ pub fn validate_ps1_safety(content: &str) -> Result<(), String> {
         "initialize-disk",
         "remove-partition",
         "set-partition",
-        "invoke-expression",       // iex
+        "invoke-expression", // iex
         "iex ",
-        "invoke-webrequest",       // download + exec
-        ". (",                      // dot-sourcing d'expression dynamique
-        "& (",                      // call operator sur expression dynamique
+        "invoke-webrequest", // download + exec
+        ". (",               // dot-sourcing d'expression dynamique
+        "& (",               // call operator sur expression dynamique
         "[system.reflection.assembly]::loadfrom",
         "[system.reflection.assembly]::loadfile",
         "add-type -assemblyname",
-        "[runtime.interopservices",  // P/Invoke non supervisé
-        "net.webclient",             // download sans proxy Tauri
+        "[runtime.interopservices", // P/Invoke non supervisé
+        "net.webclient",            // download sans proxy Tauri
         "downloadstring(",
         "downloadfile(",
-        "start-process",            // lancement de processus arbitraire
+        "start-process", // lancement de processus arbitraire
         "reg add",
         "reg delete",
         "regedit",
@@ -78,8 +78,8 @@ pub fn run_skill_impl(
             return Err("Skill composite : profondeur maximale atteinte (5 niveaux)".into());
         }
         let raw = fs::read_to_string(&composite_path).map_err(|e| e.to_string())?;
-        let cfg: CompositeSkillConfig = serde_json::from_str(&raw)
-            .map_err(|e| format!("Skill composite corrompu : {e}"))?;
+        let cfg: CompositeSkillConfig =
+            serde_json::from_str(&raw).map_err(|e| format!("Skill composite corrompu : {e}"))?;
         let total = cfg.steps.len();
         let mut last_output = String::new();
         let mut step_summaries: Vec<(String, String)> = Vec::new();
@@ -152,8 +152,8 @@ pub fn run_skill_impl(
     // ── Skill HTTP ────────────────────────────────────────────────────────────
     if http_path.exists() {
         let raw = fs::read_to_string(&http_path).map_err(|e| e.to_string())?;
-        let cfg: HttpSkillConfig = serde_json::from_str(&raw)
-            .map_err(|e| format!("Skill HTTP corrompu : {e}"))?;
+        let cfg: HttpSkillConfig =
+            serde_json::from_str(&raw).map_err(|e| format!("Skill HTTP corrompu : {e}"))?;
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -203,11 +203,7 @@ pub fn run_skill_impl(
         let body = args
             .as_deref()
             .filter(|s| !s.trim().is_empty())
-            .or_else(|| {
-                cfg.default_body
-                    .as_deref()
-                    .filter(|s| !s.trim().is_empty())
-            });
+            .or_else(|| cfg.default_body.as_deref().filter(|s| !s.trim().is_empty()));
         return execute_http(req, body);
     }
 
@@ -354,10 +350,6 @@ pub fn run_skill_impl(
 // ─── Commande Tauri ───────────────────────────────────────────────────────────
 
 #[command]
-pub fn run_skill(
-    app: AppHandle,
-    name: String,
-    args: Option<String>,
-) -> Result<String, String> {
+pub fn run_skill(app: AppHandle, name: String, args: Option<String>) -> Result<String, String> {
     run_skill_impl(&app, name, args, 0)
 }

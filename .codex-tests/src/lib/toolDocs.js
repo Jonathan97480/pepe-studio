@@ -389,43 +389,4 @@ IMPORTANT :
 Usage : <tool>{"list_sd_models": true}</tool>
 • Retourne la liste des modèles .safetensors et .ckpt trouvés dans models/sd/ et models/
 • À utiliser avant generate_image pour choisir le bon modèle`,
-    generate_3d_model: `=== generate_3d_model — Générer un modèle 3D GLB depuis une image ===
-Moteur : TRELLIS (Microsoft) — génération mesh, Gaussians et Radiance Field en une seule passe.
-Prérequis : TRELLIS + torch doivent être installés. Si ce n'est pas le cas, appelle d'abord install_trellis.
-
-Usage simple (chemin image) :
-    <tool>{"generate_3d_model": "C:/Users/moi/pepe-studio/images/chat_123456.png"}</tool>
-
-Usage avancé :
-    <tool>{"generate_3d_model": "C:/chemin/image.png", "texture_resolution": 1024, "seed": 42}</tool>
-
-Paramètres :
-    • generate_3d_model (string) : chemin ABSOLU vers l'image source PNG ou JPG.
-        → Utilise le champ imagePath d'une image générée précédemment.
-    • texture_resolution (number, optionnel) : 512 | 1024 | 2048. Défaut : 1024.
-    • seed (number, optionnel) : graine aléatoire pour la génération. Défaut : 1.
-    • simplify (number, optionnel) : ratio de simplification mesh (0.0-1.0). Défaut : 0.95.
-
-Flux typique :
-    1. L'utilisateur génère une image avec generate_image.
-    2. Le chemin de l'image est renvoyé dans le résultat (champ imagePath).
-    3. Appelle generate_3d_model avec ce chemin pour créer le modèle 3D.
-    4. Le GLB s'affiche directement dans le chat avec un viewer 3D interactif.
-
-⚠️ Si torch/TRELLIS manquent → appelle install_trellis d'abord (une seule fois).
-⚠️ TRELLIS nécessite ~16 GB VRAM et prend 1–5 min selon le GPU.
-⚠️ Première génération : téléchargement du modèle (~4 GB depuis Hugging Face).
-⚠️ Si erreur OOM : réduis texture_resolution à 512 pour diminuer la consommation mémoire.`,
-    install_trellis: `=== install_trellis — Installer TRELLIS + PyTorch (à faire une seule fois) ===
-Clone le dépôt TRELLIS (Microsoft) et installe torch + torchvision + torchaudio + dépendances.
-À appeler uniquement si generate_3d_model retourne une erreur "torch non disponible" ou "TRELLIS non installé".
-
-⚠️ Durée : 10 à 30 minutes (téléchargement PyTorch CUDA ~2 GB + dépendances TRELLIS).
-Prérequis : git + python dans PATH + accès internet + ~20 Go d'espace disque libre.
-GPU : NVIDIA recommandé avec ≥16 GB VRAM (A100, A6000, RTX 3090/4090...).
-
-Usage :
-    <tool>{"install_trellis": true}</tool>
-
-Après succès, la première génération téléchargera les poids du modèle (~4 GB depuis Hugging Face).`,
 };

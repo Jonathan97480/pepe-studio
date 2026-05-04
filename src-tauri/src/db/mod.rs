@@ -21,11 +21,11 @@ pub struct DbState(pub Mutex<Connection>);
 
 pub use conversations::{
     delete_all_conversations, delete_conversation, delete_image_message, delete_user_fact,
-    get_compressed_messages, get_conversation_plan, get_conversations_summary, get_project_structure,
-    get_user_facts, list_conversations, load_conversation_messages, rename_conversation,
-    save_conversation_plan, save_message, save_message_compressed, save_project_structure,
-    search_conversation_messages, search_meta_tags, set_user_fact, start_conversation,
-    ConversationItem, ConversationMessage, MsgResult, UserFact,
+    get_compressed_messages, get_conversation_plan, get_conversations_summary,
+    get_project_structure, get_user_facts, list_conversations, load_conversation_messages,
+    rename_conversation, save_conversation_plan, save_message, save_message_compressed,
+    save_project_structure, search_conversation_messages, search_meta_tags, set_user_fact,
+    start_conversation, ConversationItem, ConversationMessage, MsgResult, UserFact,
 };
 
 pub use documents::{

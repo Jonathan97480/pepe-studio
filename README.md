@@ -45,9 +45,175 @@ L'IA ne se contente plus de répondre — elle **agit**.
 
 ## Prérequis
 
-- [Node.js](https://nodejs.org/) 18+
-- [Rust](https://rustup.rs/) (stable)
-- [Tauri CLI](https://tauri.app/v1/guides/getting-started/prerequisites)
+- [Node.js](https://nodejs.org/) **20.12.0** (LTS) — Voir `.nvmrc`
+- [Rust](https://rustup.rs/) (stable 1.70+)
+- **Windows 10+**, macOS 10.13+, ou Linux (Ubuntu 20.04+)
+- **GPU NVIDIA** recommandé pour les modèles LLM (CUDA 11.8+)
+
+## Installation
+
+### 1. Cloner le repository
+
+```bash
+git clone https://github.com/pepe-studio/pepe-studio.git
+cd pepe-studio
+```
+
+### 2. Installer les dépendances
+
+**Frontend :**
+
+```bash
+npm install
+```
+
+**Backend (Rust) :** S'installe automatiquement lors du build
+
+### 3. Télécharger un modèle GGUF
+
+Placer un modèle GGUF dans le dossier `models/` (ex: `models/mistral-7b.gguf`)
+
+Modèles recommandés :
+
+- [Mistral 7B](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2) — Équilibré
+- [Qwen 14B](https://huggingface.co/Qwen/Qwen-14B-Chat) — Puissant
+- [Gemma 7B](https://huggingface.co/google/gemma-7b-it) — Léger
+
+**Note :** llama.cpp doit être présent dans `llama.cpp/` (fourni avec le repo)
+
+## Développement
+
+### Mode dev
+
+```bash
+npm run tauri:dev
+```
+
+Lance simultanément :
+
+- Frontend Next.js sur `http://localhost:3000`
+- Backend Tauri + Rust
+- Hot reload automatique sur changements
+
+### Scripts disponibles
+
+```bash
+npm run tauri:dev      # 🚀 Mode développement
+npm run tauri:build    # 🏗️ Build production
+npm run check          # 🔍 Lint + TypeScript
+npm run lint:fix       # 🧹 Autofix ESLint
+npm run format         # ✨ Format avec Prettier
+npm run typecheck      # ✅ Vérifier types
+npm run test:web       # 🧪 Tests TypeScript
+npm run test:rust      # 🦀 Tests Rust
+npm run test           # 🧪 Tous les tests
+```
+
+### Structure du code
+
+```
+src/                   # Frontend React/TypeScript
+├── app/               # Next.js app router
+├── components/        # Composants React
+├── hooks/             # Custom hooks (chat, models, tools)
+├── lib/               # Utilities (parsing, dispatch, etc.)
+├── tools/             # API clients (Context7, MCP, etc.)
+├── context/           # React context providers
+└── types/             # Type definitions
+
+src-tauri/             # Backend Rust
+├── src/
+│   ├── main.rs        # 57+ commandes Tauri
+│   ├── db.rs          # SQLite + RAG
+│   ├── llama_sidecar.rs    # LLM lifecycle
+│   ├── terminal_manager.rs # PTY sessions
+│   ├── mcp.rs         # Model Context Protocol
+│   └── ...
+└── Cargo.toml
+```
+
+## Build Production
+
+```bash
+npm run tauri:build
+```
+
+Génère :
+
+- Windows: `src-tauri/target/release/bundle/msi/` (installer .msi)
+- macOS: `src-tauri/target/release/bundle/dmg/`
+- Linux: `src-tauri/target/release/bundle/deb/` (Debian) + AppImage
+
+## Configuration
+
+### Modèles LLM
+
+Ajouter des modèles dans `models/` dossier. L'app les détecte automatiquement.
+
+Modèles supportés :
+
+- Format : GGUF (via llama.cpp)
+- Architectures : Gemma, Mistral, Qwen, Llama, etc.
+
+### Clés API (optionnel)
+
+Pour activer search web, context7, etc., paramétrer dans **Settings** :
+
+- `BRAVE_SEARCH_KEY` / `SERPER_SEARCH_KEY` / `TAVILY_SEARCH_KEY` (Web search)
+- `CONTEXT7_API_KEY` (Documentation search)
+- Hugging Face token (pour gated models)
+
+## Troubleshooting
+
+### L'app ne démarre pas
+
+```bash
+# Vérifier les dépendances
+npm ci
+cargo check --manifest-path src-tauri/Cargo.toml
+
+# Vérifier le modèle GGUF existe
+ls models/
+```
+
+### LLM lent ou erreurs CUDA
+
+- Vérifier NVIDIA CUDA 11.8+ installé
+- Vérifier GPU détecté : `nvidia-smi`
+- Réduire taille du contexte dans Settings
+- Essayer modèle plus petit (7B au lieu de 14B)
+
+### Terminal ne fonctionne pas (Windows)
+
+- Nécessite Windows 10 Build 19041+
+- Vérifier ConPTY support en exécutant Powershell 7+
+
+## Support & Contribution
+
+- 🐛 [Signaler un bug](https://github.com/pepe-studio/pepe-studio/issues)
+- 💡 [Proposer une feature](https://github.com/pepe-studio/pepe-studio/discussions)
+- 🤝 [Contribuer au code](CONTRIBUTING.md)
+
+## License
+
+MIT License — Voir [LICENSE](LICENSE) pour détails.
+
+---
+
+## Roadmap
+
+- [ ] Support Linux/macOS complet
+- [ ] Interface web (sans Tauri)
+- [ ] Ollama integration
+- [ ] Streaming responses optimization
+- [ ] Plugins système
+- [ ] Multi-user mode
+
+---
+
+**Pepe-Studio v1.0.0** — AI Agent OS  
+[GitHub](https://github.com/pepe-studio/pepe-studio) | [Documentation](https://pepe-studio.dev) | [Discord](https://discord.gg/pepe-studio)
+
 - Un modèle LLM au format GGUF
 - Les binaires **llama.cpp**
 
