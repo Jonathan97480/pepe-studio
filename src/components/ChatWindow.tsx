@@ -533,12 +533,12 @@ export default function ChatWindow({
                 ttsEnabled={ttsEnabled}
                 isSpeaking={isSpeaking}
                 onToggleVoice={() => {
-                        if (isSpeaking) {
-                            stopSpeaking();
-                            return;
-                        }
-                        setTtsEnabled((value) => !value);
-                    }}
+                    if (isSpeaking) {
+                        stopSpeaking();
+                        return;
+                    }
+                    setTtsEnabled((value) => !value);
+                }}
             />
             <div ref={scrollContainerRef} onScroll={updateAutoScrollState} className="flex-1 overflow-y-auto p-8">
                 <div className="mx-auto flex max-w-3xl flex-col gap-4">
@@ -724,7 +724,9 @@ export default function ChatWindow({
                     isContextReady={isContextReady}
                     handleFileSelect={handleFileSelect}
                     isListening={isListening}
-                    onToggleMic={() => handleMic((transcript) => setPrompt((prev) => (prev ? `${prev} ${transcript}` : transcript)))}
+                    onToggleMic={() =>
+                        handleMic((transcript) => setPrompt((prev) => (prev ? `${prev} ${transcript}` : transcript)))
+                    }
                     thinkingEnabled={thinkingEnabled}
                     onToggleThinking={handleToggleThinking}
                     deepThinkingEnabled={deepThinkingEnabled}

@@ -127,7 +127,6 @@ export function ModelSettingsProvider({ children }: { children: ReactNode }) {
     const [isModelLoaded, setIsModelLoaded] = useState(false);
     const [loadedModelPath, setLoadedModelPath] = useState<string | null>(null);
 
-
     useEffect(() => {
         if (sdModelPath) {
             localStorage.setItem("customapp_sd_model_path", sdModelPath);

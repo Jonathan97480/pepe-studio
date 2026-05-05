@@ -310,7 +310,7 @@ pepe-studio/
 ### Backend Rust
 
 - `src-tauri/src/main.rs` expose les commandes Tauri.
-- `src-tauri/src/db.rs` gère la persistance SQLite.
+- `src-tauri/src/db/` gère la persistance SQLite (modules : `models.rs`, `documents.rs`, `conversations.rs`, `schema.rs`).
 - `src-tauri/src/terminal_manager.rs`, `scraper.rs`, `mcp.rs` et `llama_sidecar.rs` couvrent respectivement terminal, web, MCP et runtime modèle.
 - `src-tauri/src/api_server.rs` expose une API OpenAI-compatible (`/v1/models`, `/v1/chat/completions`) pour connecter Open WebUI.
 

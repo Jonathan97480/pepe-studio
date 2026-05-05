@@ -203,7 +203,10 @@ pub fn create_mcp_server(
     )
     .map_err(|e| e.to_string())?;
 
-    Ok(format!("Serveur MCP '{safe_name}' sauvegarde dans {}", js_path.display()))
+    Ok(format!(
+        "Serveur MCP '{safe_name}' sauvegarde dans {}",
+        js_path.display()
+    ))
 }
 
 /// Démarre un serveur MCP, effectue le handshake MCP et retourne la liste des outils.
@@ -244,10 +247,9 @@ pub fn start_mcp_server(
         use std::os::windows::process::CommandExt;
         node_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    let mut child = node_cmd.spawn()
-        .map_err(|e| {
-            format!("Impossible de lancer node : {e}. Verifiez que Node.js est installe.")
-        })?;
+    let mut child = node_cmd.spawn().map_err(|e| {
+        format!("Impossible de lancer node : {e}. Verifiez que Node.js est installe.")
+    })?;
 
     let stdin = child.stdin.take().ok_or("stdin indisponible")?;
     let child_stdout = child.stdout.take().ok_or("stdout indisponible")?;
@@ -330,10 +332,10 @@ pub fn call_mcp_tool(
                     Some("image") => {
                         // MCP image content: {type:"image", data:"base64...", mimeType:"image/png"}
                         let mime = c["mimeType"].as_str().unwrap_or("image/png");
-                        c["data"].as_str().map(|data| {
-                            format!("![MCP Image](data:{};base64,{})", mime, data)
-                        })
-                    },
+                        c["data"]
+                            .as_str()
+                            .map(|data| format!("![MCP Image](data:{};base64,{})", mime, data))
+                    }
                     _ => None,
                 }
             })
@@ -397,6 +399,8 @@ pub fn stop_mcp_server(mcp_state: State<McpState>, name: String) -> Result<Strin
         srv.child.kill().ok();
         Ok(format!("Serveur '{safe_name}' arrete."))
     } else {
-        Err(format!("Serveur '{safe_name}' n'est pas en cours d'execution."))
+        Err(format!(
+            "Serveur '{safe_name}' n'est pas en cours d'execution."
+        ))
     }
 }

@@ -1,9 +1,5 @@
 ﻿import { useCallback, useEffect, useRef, useState } from "react";
-import {
-    detectRepetitionLoop,
-    isCorruptedThinkingChunk,
-    normalizeVisibleAssistantText,
-} from "../lib/streamUtils";
+import { detectRepetitionLoop, isCorruptedThinkingChunk, normalizeVisibleAssistantText } from "../lib/streamUtils";
 import { invoke as apiInvoke } from "@tauri-apps/api/tauri";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { buildLlamaArgs, LlamaLaunchConfig } from "../lib/llamaWrapper";

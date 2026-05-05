@@ -149,7 +149,10 @@ pub fn generate_image(
             let job_resp = reqwest::blocking::get(&poll_full)
                 .map_err(|e| format!("Erreur HTTP sd-server poll: {}", e))?;
             if !job_resp.status().is_success() {
-                return Err(format!("sd-server poll échoué (HTTP {})", job_resp.status()));
+                return Err(format!(
+                    "sd-server poll échoué (HTTP {})",
+                    job_resp.status()
+                ));
             }
             let job_json: serde_json::Value = job_resp
                 .json()
@@ -177,8 +180,7 @@ pub fn generate_image(
                             serde_json::json!({ "data_url": data_url, "progress": 100 }),
                         );
                     } else {
-                        let _ =
-                            app.emit_all("sd-preview", serde_json::json!({ "progress": 100 }));
+                        let _ = app.emit_all("sd-preview", serde_json::json!({ "progress": 100 }));
                     }
                     break;
                 }
@@ -233,8 +235,8 @@ pub fn generate_image(
                             serde_json::json!({ "data_url": data_url, "progress": progress }),
                         );
                     } else {
-                        let _ = app
-                            .emit_all("sd-preview", serde_json::json!({ "progress": progress }));
+                        let _ =
+                            app.emit_all("sd-preview", serde_json::json!({ "progress": progress }));
                     }
                     std::thread::sleep(std::time::Duration::from_millis(250));
                 }
@@ -333,7 +335,8 @@ pub fn generate_image(
                     if !bytes.is_empty() {
                         let data_url =
                             format!("data:image/png;base64,{}", BASE64_STANDARD.encode(bytes));
-                        let _ = app.emit_all("sd-preview", serde_json::json!({ "data_url": data_url }));
+                        let _ =
+                            app.emit_all("sd-preview", serde_json::json!({ "data_url": data_url }));
                     }
                 }
                 last_preview_mtime = modified;
@@ -383,8 +386,8 @@ pub fn generate_image(
                 match cmd.spawn() {
                     Ok(child) => {
                         state.set_child_and_port(child, 8765);
-                        let deadline = std::time::Instant::now()
-                            + std::time::Duration::from_secs(300);
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(300);
                         loop {
                             if std::time::Instant::now() > deadline {
                                 break;

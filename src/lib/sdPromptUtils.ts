@@ -106,9 +106,7 @@ export function inferPresetFromPrompt(prompt: string): ImagePreset {
         );
     if (hasHumanSubject && hasLargeEnvironment) return "wide_scene";
 
-    if (
-        /(portrait|headshot|close[- ]?up|closeup|face|selfie|character|person|woman|man|eyes|smile|visage)/.test(lower)
-    )
+    if (/(portrait|headshot|close[- ]?up|closeup|face|selfie|character|person|woman|man|eyes|smile|visage)/.test(lower))
         return "portrait";
     if (
         /(landscape|scenery|cinematic|wide shot|environment|city|street|mountain|forest|desert|battlefield|grand decor|d[ée]cor|full body)/.test(
@@ -152,8 +150,7 @@ export function getPresetConfig(preset: ImagePreset): PresetConfig {
                 steps: 40,
                 cfgScale: 7.2,
                 sampler: "euler_a",
-                promptBoost:
-                    "detailed face, symmetrical face, sharp eyes, natural skin texture, realistic proportions",
+                promptBoost: "detailed face, symmetrical face, sharp eyes, natural skin texture, realistic proportions",
                 negativeBoost:
                     "deformed face, asymmetrical eyes, malformed eyes, bad eyes, extra eyes, distorted mouth, bad teeth, disfigured",
             };
@@ -203,8 +200,7 @@ export function getPresetConfig(preset: ImagePreset): PresetConfig {
                 steps: 34,
                 cfgScale: 7.1,
                 sampler: "euler_a",
-                promptBoost:
-                    "appetizing presentation, natural texture, soft studio lighting, shallow depth of field",
+                promptBoost: "appetizing presentation, natural texture, soft studio lighting, shallow depth of field",
                 negativeBoost: "burnt colors, mushy texture, plastic look, deformed cutlery, messy plate",
             };
         case "fantasy_art":
@@ -221,8 +217,7 @@ export function getPresetConfig(preset: ImagePreset): PresetConfig {
                 cfgScale: 6.2,
                 sampler: "euler_a",
                 promptBoost: "flat vector style, minimal design, strong silhouette, clean edges",
-                negativeBoost:
-                    "photorealistic texture, gradients, blurry edges, cluttered details, watermark",
+                negativeBoost: "photorealistic texture, gradients, blurry edges, cluttered details, watermark",
             };
         default:
             return {

@@ -79,7 +79,7 @@ export const PERSONALITIES: Personality[] = [
             "REPLACE:\n" +
             "<nouveau bloc de code>\n\n" +
             "Règles du format patch :\n" +
-            "- Le bloc SEARCH doit être copiéexactement depuis le fichier (espaces et retours à la ligne compris).\n" +
+            "- Le bloc SEARCH doit être copié exactement depuis le fichier (espaces et retours à la ligne compris).\n" +
             "- Le bloc SEARCH doit être unique dans le fichier (ajoute du contexte si nécessaire).\n" +
             "- Tu peux enchaîner plusieurs blocs FILE/SEARCH/REPLACE dans la même réponse.\n" +
             "- Pour créer un nouveau skill, décris-le normalement (pas besoin du format patch).\n\n" +

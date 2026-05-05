@@ -11,9 +11,7 @@ export interface HardwareInfo {
 
 /** Formatte la chaîne GPU pour l'affichage dans le contexte système. */
 export function formatGpuString(hw: HardwareInfo): string {
-    return hw.has_dedicated_gpu
-        ? `${hw.gpu_name} (${hw.gpu_vram_gb.toFixed(1)} Go VRAM)`
-        : "GPU intégré / non détecté";
+    return hw.has_dedicated_gpu ? `${hw.gpu_name} (${hw.gpu_vram_gb.toFixed(1)} Go VRAM)` : "GPU intégré / non détecté";
 }
 
 /**

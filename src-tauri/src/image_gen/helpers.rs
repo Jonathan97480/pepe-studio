@@ -185,7 +185,11 @@ pub fn has_enough_free_vram() -> bool {
                 "[image_gen] VRAM libre : {} MB, nécessaire : {} MB → coexistence {}",
                 free_mb,
                 needed,
-                if free_mb >= needed { "OK" } else { "IMPOSSIBLE" }
+                if free_mb >= needed {
+                    "OK"
+                } else {
+                    "IMPOSSIBLE"
+                }
             );
             free_mb >= needed
         }

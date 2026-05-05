@@ -967,4 +967,3 @@ Soit tu utilises un outil différent, soit tu réponds avec le dernier résultat
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [streaming, messages]);
 }
-

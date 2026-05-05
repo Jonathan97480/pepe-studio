@@ -5,11 +5,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { useModels, type ModelConfig, parseSamplingJson } from "../hooks/useModels";
 import { useModelSettings, type TurboQuantType } from "../context/ModelSettingsContext";
 import { buildLlamaArgs, detectChatTemplate, type DetectedTemplate } from "../lib/llamaWrapper";
-import {
-    autoConfigureFromHardware,
-    type HardwareInfo,
-    type AutoMode,
-} from "../lib/hardwareConfig";
+import { autoConfigureFromHardware, type HardwareInfo, type AutoMode } from "../lib/hardwareConfig";
 import { inspectModelMetadata, type ModelMetadata } from "../lib/modelMetadata";
 import PersonalityPicker from "./PersonalityPicker";
 import { SdModelSelector } from "./models/SdModelSelector";
@@ -98,7 +94,11 @@ export default function ModelsPanel() {
         setDrafts((prev) => ({ ...prev, [path]: { ...getOrCreateDraft(path), ...updates } }));
 
     const clearDraft = (path: string) =>
-        setDrafts((prev) => { const n = { ...prev }; delete n[path]; return n; });
+        setDrafts((prev) => {
+            const n = { ...prev };
+            delete n[path];
+            return n;
+        });
 
     const handleSaveConfig = async (path: string) => {
         await saveConfig({ ...getOrCreateDraft(path), path });
@@ -152,7 +152,10 @@ export default function ModelsPanel() {
                     const auto = autoConfigureFromHardware(hw, "balanced", metadata);
                     config = { ...config, ...auto };
                     updateDraft(path, auto);
-                    setAutoDetectNotes((prev) => ({ ...prev, [path]: ["⚡ Auto-détecté au premier lancement", ...auto.notes] }));
+                    setAutoDetectNotes((prev) => ({
+                        ...prev,
+                        [path]: ["⚡ Auto-détecté au premier lancement", ...auto.notes],
+                    }));
                 } catch (hwErr) {
                     console.warn("[ModelsPanel] Auto-détection échouée:", hwErr);
                 }
@@ -196,7 +199,12 @@ export default function ModelsPanel() {
                 if (metadata) setModelMetadataMap((prev) => ({ ...prev, [path]: metadata }));
             }
             const cfg = autoConfigureFromHardware(hw, mode, metadata);
-            updateDraft(path, { context_window: cfg.context_window, turbo_quant: cfg.turbo_quant, n_gpu_layers: cfg.n_gpu_layers, threads: cfg.threads });
+            updateDraft(path, {
+                context_window: cfg.context_window,
+                turbo_quant: cfg.turbo_quant,
+                n_gpu_layers: cfg.n_gpu_layers,
+                threads: cfg.threads,
+            });
             setAutoDetectNotes((prev) => ({ ...prev, [path]: cfg.notes }));
         } catch (e: unknown) {
             setActionError(`Détection matériel échouée : ${getErrorMessage(e)}`);
@@ -221,25 +229,44 @@ export default function ModelsPanel() {
     };
 
     useEffect(() => {
-        if (!actionError) { setLlamaLogs(null); return; }
+        if (!actionError) {
+            setLlamaLogs(null);
+            return;
+        }
         let cancelled = false;
-        invoke<LlamaLogs>("get_llama_logs").then((logs) => { if (!cancelled) setLlamaLogs(logs); }).catch(() => { if (!cancelled) setLlamaLogs(null); });
-        return () => { cancelled = true; };
+        invoke<LlamaLogs>("get_llama_logs")
+            .then((logs) => {
+                if (!cancelled) setLlamaLogs(logs);
+            })
+            .catch(() => {
+                if (!cancelled) setLlamaLogs(null);
+            });
+        return () => {
+            cancelled = true;
+        };
     }, [actionError]);
 
     useEffect(() => {
-        invoke<HardwareInfo>("get_hardware_info").then((hw) => setHardwareInfo(hw)).catch((err) => console.warn("[ModelsPanel] Hardware info fetch failed:", err));
+        invoke<HardwareInfo>("get_hardware_info")
+            .then((hw) => setHardwareInfo(hw))
+            .catch((err) => console.warn("[ModelsPanel] Hardware info fetch failed:", err));
     }, []);
 
-    useEffect(() => { refreshSdModels(); }, [refreshSdModels]);
+    useEffect(() => {
+        refreshSdModels();
+    }, [refreshSdModels]);
 
     useEffect(() => {
         if (!expandedPath || modelMetadataMap[expandedPath]) return;
         let cancelled = false;
         inspectModelMetadata(expandedPath)
-            .then((meta) => { if (!cancelled) setModelMetadataMap((prev) => ({ ...prev, [expandedPath]: meta })); })
+            .then((meta) => {
+                if (!cancelled) setModelMetadataMap((prev) => ({ ...prev, [expandedPath]: meta }));
+            })
             .catch((err) => console.warn("[ModelsPanel] Metadata fetch failed for", expandedPath, err));
-        return () => { cancelled = true; };
+        return () => {
+            cancelled = true;
+        };
     }, [expandedPath, modelMetadataMap]);
 
     if (loading) {
@@ -263,7 +290,10 @@ export default function ModelsPanel() {
                         <p className="text-xs uppercase tracking-[0.35em] text-slate-400">Bibliothèque</p>
                         <h2 className="text-2xl font-semibold text-white">Modèles locaux</h2>
                     </div>
-                    <button onClick={handleRefreshAll} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/10">
+                    <button
+                        onClick={handleRefreshAll}
+                        className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/10"
+                    >
                         🔄 Actualiser
                     </button>
                 </div>
@@ -275,8 +305,12 @@ export default function ModelsPanel() {
                         {listError ?? actionError}
                         {!listError && llamaLogs?.stderr && (
                             <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
-                                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-red-300">Logs llama-server</p>
-                                <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-red-100">{llamaLogs.stderr}</pre>
+                                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-red-300">
+                                    Logs llama-server
+                                </p>
+                                <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-red-100">
+                                    {llamaLogs.stderr}
+                                </pre>
                             </div>
                         )}
                     </div>
@@ -293,8 +327,16 @@ export default function ModelsPanel() {
                     <div className="flex flex-col items-center justify-center gap-4 pt-20 text-center text-slate-400">
                         <span className="text-5xl">📂</span>
                         <p className="text-lg font-medium text-white">Aucun modèle trouvé</p>
-                        <p className="text-sm">Place tes fichiers <code className="rounded bg-white/10 px-2 py-0.5">.gguf</code> dans le dossier <code className="rounded bg-white/10 px-2 py-0.5">models/</code></p>
-                        <button onClick={handleRefreshAll} className="mt-2 rounded-2xl bg-blue-500 px-6 py-2 text-sm font-medium text-white transition hover:bg-blue-400">Rafraîchir</button>
+                        <p className="text-sm">
+                            Place tes fichiers <code className="rounded bg-white/10 px-2 py-0.5">.gguf</code> dans le
+                            dossier <code className="rounded bg-white/10 px-2 py-0.5">models/</code>
+                        </p>
+                        <button
+                            onClick={handleRefreshAll}
+                            className="mt-2 rounded-2xl bg-blue-500 px-6 py-2 text-sm font-medium text-white transition hover:bg-blue-400"
+                        >
+                            Rafraîchir
+                        </button>
                     </div>
                 ) : (
                     <div className="mx-auto flex max-w-3xl flex-col gap-4">
@@ -338,4 +380,3 @@ export default function ModelsPanel() {
         </div>
     );
 }
-

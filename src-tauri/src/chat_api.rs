@@ -166,7 +166,10 @@ mod tests {
                 "messages": [{"role": "user", "content": "hi"}],
                 "temperature": temp
             });
-            assert!(validate_chat_request(&body).is_ok(), "Attendu Ok pour temperature={temp}");
+            assert!(
+                validate_chat_request(&body).is_ok(),
+                "Attendu Ok pour temperature={temp}"
+            );
         }
     }
 

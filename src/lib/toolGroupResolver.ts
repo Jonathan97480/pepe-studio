@@ -59,7 +59,9 @@ export function getToolGroupId(id: string): string | null {
 
     // Navigateur / serveur dev
     if (
-        ["open_browser", "start_dev_server", "stop_dev_server", "get_browser_errors", "get_dev_server_info"].includes(id)
+        ["open_browser", "start_dev_server", "stop_dev_server", "get_browser_errors", "get_dev_server_info"].includes(
+            id,
+        )
     )
         return "browser";
 
