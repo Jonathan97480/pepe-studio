@@ -42,9 +42,11 @@ export default function Sidebar({
     const isChatActive = items.find((i) => i.label === "Chat")?.active ?? false;
 
     return (
-        <nav className={`flex h-full flex-col justify-between transition-all duration-300 text-white ${
-            isCollapsed ? "px-2 py-3 items-center" : "md:px-5 md:py-6 px-2 py-3"
-        }`}>
+        <nav
+            className={`flex h-full flex-col justify-between transition-all duration-300 text-white ${
+                isCollapsed ? "px-2 py-3 items-center" : "md:px-5 md:py-6 px-2 py-3"
+            }`}
+        >
             <div className="flex min-h-0 flex-1 flex-col w-full">
                 {!isCollapsed && (
                     <div className="mb-8 rounded-3xl border border-white/10 bg-slate-950/60 p-5 shadow-xl shadow-slate-950/30 hidden md:block">
@@ -70,20 +72,25 @@ export default function Sidebar({
                 </div>
 
                 {/* Liste des conversations — visible uniquement sur l'onglet Chat et pas collapsed */}
-                {!isCollapsed && isChatActive && onNewConversation && onSelectConversation && onDeleteConversation && onDeleteAll && (
-                    <div className="mt-4 min-h-0 flex-1 overflow-y-auto hidden md:flex md:flex-col w-full">
-                        <div className="mb-1 border-t border-white/10 pt-4">
-                            <ConversationsList
-                                activeConversationId={activeConversationId ?? null}
-                                refreshTrigger={conversationsRefreshTrigger}
-                                onNewConversation={onNewConversation}
-                                onSelectConversation={onSelectConversation}
-                                onDeleteConversation={onDeleteConversation}
-                                onDeleteAll={onDeleteAll}
-                            />
+                {!isCollapsed &&
+                    isChatActive &&
+                    onNewConversation &&
+                    onSelectConversation &&
+                    onDeleteConversation &&
+                    onDeleteAll && (
+                        <div className="mt-4 min-h-0 flex-1 overflow-y-auto hidden md:flex md:flex-col w-full">
+                            <div className="mb-1 border-t border-white/10 pt-4">
+                                <ConversationsList
+                                    activeConversationId={activeConversationId ?? null}
+                                    refreshTrigger={conversationsRefreshTrigger}
+                                    onNewConversation={onNewConversation}
+                                    onSelectConversation={onSelectConversation}
+                                    onDeleteConversation={onDeleteConversation}
+                                    onDeleteAll={onDeleteAll}
+                                />
+                            </div>
                         </div>
-                    </div>
-                )}
+                    )}
             </div>
 
             <div className="flex flex-col gap-2 w-full">
@@ -98,7 +105,9 @@ export default function Sidebar({
                     <div className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-300 shadow-xl shadow-slate-950/20 hidden md:block">
                         <p className="font-semibold text-white text-xs md:text-sm">Statut</p>
                         <div className="mt-2 flex items-center gap-2">
-                            <span className={`h-2 w-2 rounded-full ${isModelLoaded ? "bg-emerald-400" : "bg-slate-500"}`} />
+                            <span
+                                className={`h-2 w-2 rounded-full ${isModelLoaded ? "bg-emerald-400" : "bg-slate-500"}`}
+                            />
                             <span className={isModelLoaded ? "text-emerald-300" : "text-slate-400"}>
                                 {isModelLoaded ? "Modèle chargé" : "Aucun modèle"}
                             </span>
@@ -111,7 +120,10 @@ export default function Sidebar({
                     </div>
                 )}
                 {isCollapsed && (
-                    <div title="Statut modèle" className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10">
+                    <div
+                        title="Statut modèle"
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10"
+                    >
                         <span className={`h-2 w-2 rounded-full ${isModelLoaded ? "bg-emerald-400" : "bg-slate-500"}`} />
                     </div>
                 )}
@@ -119,4 +131,3 @@ export default function Sidebar({
         </nav>
     );
 }
-

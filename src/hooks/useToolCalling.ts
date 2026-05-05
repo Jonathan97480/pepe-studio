@@ -193,8 +193,27 @@ export function useToolCalling({
     setLiveImageProgress,
     insertMessage,
 }: UseToolCallingOptions): void {
-    const { modelPath, temperature, contextWindow, turboQuant, sampling, thinkingEnabled, machineContext, systemPrompt } = modelConfig;
-    const { chatModeRef, prevStreamingRef, lastToolSignatureRef, lastToolWasErrorRef, jsonParseErrorCountRef, convTitleSetRef, dispatchToolRef, projectStructureRef, planRef } = refs;
+    const {
+        modelPath,
+        temperature,
+        contextWindow,
+        turboQuant,
+        sampling,
+        thinkingEnabled,
+        machineContext,
+        systemPrompt,
+    } = modelConfig;
+    const {
+        chatModeRef,
+        prevStreamingRef,
+        lastToolSignatureRef,
+        lastToolWasErrorRef,
+        jsonParseErrorCountRef,
+        convTitleSetRef,
+        dispatchToolRef,
+        projectStructureRef,
+        planRef,
+    } = refs;
     const selectedSDFormat = sdConfig?.selectedSDFormat;
     const selectedBatchCount = sdConfig?.selectedBatchCount;
     const selectedSDModel = sdConfig?.selectedSDModel;

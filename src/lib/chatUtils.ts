@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/tauri";
-export { extractSimpleTool, extractWriteFileTool, normalizeToolTags, parseMessageSegments, sanitizeLlmJson } from "./toolParsing";
+export {
+    extractSimpleTool,
+    extractWriteFileTool,
+    normalizeToolTags,
+    parseMessageSegments,
+    sanitizeLlmJson,
+} from "./toolParsing";
 
 export type ChatMode = "ask" | "plan" | "agent";
 
@@ -11,7 +17,6 @@ export function buildFallbackConversationTitle(messages: { role: string; content
     const title = words.join(" ").trim();
     return title || "Nouvelle conversation";
 }
-
 
 /** Appelle une commande Tauri avec un timeout. Lance une erreur si pas de réponse dans `ms` ms. */
 export function invokeWithTimeout<T>(cmd: string, args: Record<string, unknown>, ms: number): Promise<T> {

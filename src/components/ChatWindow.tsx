@@ -20,7 +20,12 @@ import { ImageFormatPicker } from "./chat/ImageFormatPicker";
 import { useConversationLoader } from "../hooks/useConversationLoader";
 import { useVoice } from "../hooks/useVoice";
 import { useBuildMachineContext } from "../hooks/useBuildMachineContext";
-import { useToolCalling, type UseModelConfig, type UseToolCallingRefs, type UseSDConfig } from "../hooks/useToolCalling";
+import {
+    useToolCalling,
+    type UseModelConfig,
+    type UseToolCallingRefs,
+    type UseSDConfig,
+} from "../hooks/useToolCalling";
 import { useFileAttachments } from "../hooks/useFileAttachments";
 import { autoConfigureFromHardware, type HardwareInfo } from "../lib/hardwareConfig";
 import { inspectModelMetadata } from "../lib/modelMetadata";

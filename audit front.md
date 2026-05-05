@@ -16,7 +16,7 @@ Ce document liste tout ce qui doit etre corrige cote frontend, avec les fichiers
 
 ## Priorite 2 - Elevee
 
-- [ ] Decouper le hook central de tool-calling en modules plus petits
+- [x] Decouper le hook central de tool-calling en modules plus petits
     - Objectif: separer orchestration, garde de mode, docs outils, execution des handlers
     - Fichiers a modifier:
         - src/hooks/useToolCalling.ts
@@ -27,13 +27,13 @@ Ce document liste tout ce qui doit etre corrige cote frontend, avec les fichiers
         - src/lib/toolTerminalHandlers.ts
         - src/lib/toolSkillHandlers.ts
 
-- [ ] Reduire le couplage ChatWindow -> useToolCalling
+- [x] Reduire le couplage ChatWindow -> useToolCalling
     - Objectif: limiter le nombre de props passees et extraire des sous-objets de config
     - Fichiers a modifier:
         - src/components/ChatWindow.tsx
         - src/hooks/useToolCalling.ts
 
-- [ ] Nettoyer la logique morte du builder de contexte
+- [x] Nettoyer la logique morte du builder de contexte
     - Problematique: branche compacte forcee en permanence
     - Fichiers a modifier:
         - src/hooks/useBuildMachineContext.ts

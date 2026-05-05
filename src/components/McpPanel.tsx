@@ -105,7 +105,9 @@ export default function McpPanel() {
         }
     }, []);
 
-    useEffect(() => { refresh(); }, [refresh]);
+    useEffect(() => {
+        refresh();
+    }, [refresh]);
 
     const handleCreate = async () => {
         if (!newName.trim()) return;
@@ -219,7 +221,6 @@ export default function McpPanel() {
             <div className="flex flex-col lg:flex-row flex-1 min-h-0 gap-0">
                 {/* ── Liste des serveurs ── */}
                 <div className="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6 flex flex-col gap-4 border-b lg:border-b-0 lg:border-r border-white/10">
-
                     {/* Formulaire de création */}
                     {showCreate && (
                         <div className="rounded-2xl border border-blue-400/30 bg-blue-500/5 p-5 flex flex-col gap-4">
@@ -247,7 +248,9 @@ export default function McpPanel() {
                                 </div>
                             </div>
                             <div className="flex flex-col gap-1">
-                                <label className="text-xs text-slate-400">Script Node.js (JSON-RPC 2.0 over stdio)</label>
+                                <label className="text-xs text-slate-400">
+                                    Script Node.js (JSON-RPC 2.0 over stdio)
+                                </label>
                                 <textarea
                                     value={newScript}
                                     onChange={(e) => setNewScript(e.target.value)}
@@ -270,7 +273,10 @@ export default function McpPanel() {
                                     {creating ? "Sauvegarde…" : "💾 Sauvegarder"}
                                 </button>
                                 <button
-                                    onClick={() => { setShowCreate(false); setCreateError(null); }}
+                                    onClick={() => {
+                                        setShowCreate(false);
+                                        setCreateError(null);
+                                    }}
                                     className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/10"
                                 >
                                     Annuler
@@ -292,30 +298,35 @@ export default function McpPanel() {
                         <div key={srv.name} className="rounded-2xl border border-white/10 bg-white/5 overflow-hidden">
                             {/* Header serveur */}
                             <div className="flex items-center gap-3 px-4 py-3">
-                                <span className={`h-2 w-2 rounded-full ${srv.running ? "bg-emerald-400" : "bg-slate-500"}`} />
+                                <span
+                                    className={`h-2 w-2 rounded-full ${srv.running ? "bg-emerald-400" : "bg-slate-500"}`}
+                                />
                                 <div className="flex-1 min-w-0">
                                     <p className="font-medium text-sm text-white truncate">{srv.name}</p>
                                     <p className="text-xs text-slate-400 truncate">{srv.description}</p>
                                 </div>
-                                <span className={`rounded-xl px-2 py-0.5 text-xs font-medium ${srv.running ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-500/15 text-slate-400"}`}>
+                                <span
+                                    className={`rounded-xl px-2 py-0.5 text-xs font-medium ${srv.running ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-500/15 text-slate-400"}`}
+                                >
                                     {srv.running ? "Actif" : "Arrêté"}
                                 </span>
-                                {srv.running
-                                    ? <button
+                                {srv.running ? (
+                                    <button
                                         onClick={() => handleStop(srv.name)}
                                         disabled={actioning === srv.name}
                                         className="rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-500/20 disabled:opacity-50"
                                     >
                                         {actioning === srv.name ? "…" : "⏹ Arrêter"}
                                     </button>
-                                    : <button
+                                ) : (
+                                    <button
                                         onClick={() => handleStart(srv.name)}
                                         disabled={actioning === srv.name}
                                         className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
                                     >
                                         {actioning === srv.name ? "…" : "▶ Démarrer"}
                                     </button>
-                                }
+                                )}
                                 <button
                                     onClick={() => setExpandedServer(expandedServer === srv.name ? null : srv.name)}
                                     className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-white/10"
@@ -335,13 +346,20 @@ export default function McpPanel() {
                                         </p>
                                     ) : (
                                         srv.tools.map((tool) => (
-                                            <div key={tool.name} className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                                            <div
+                                                key={tool.name}
+                                                className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
+                                            >
                                                 <div className="flex-1 min-w-0">
                                                     <p className="text-xs font-medium text-slate-200">{tool.name}</p>
-                                                    <p className="text-xs text-slate-500 truncate">{tool.description}</p>
+                                                    <p className="text-xs text-slate-500 truncate">
+                                                        {tool.description}
+                                                    </p>
                                                 </div>
                                                 <button
-                                                    onClick={() => handleOpenTest(srv.name, tool.name, tool.inputSchema)}
+                                                    onClick={() =>
+                                                        handleOpenTest(srv.name, tool.name, tool.inputSchema)
+                                                    }
                                                     className="rounded-xl border border-violet-400/30 bg-violet-500/10 px-3 py-1 text-xs text-violet-300 transition hover:bg-violet-500/20"
                                                 >
                                                     🧪 Tester
@@ -361,10 +379,16 @@ export default function McpPanel() {
                         <div className="flex items-center justify-between">
                             <div>
                                 <p className="text-xs text-slate-400 uppercase tracking-wider">Test</p>
-                                <p className="font-semibold text-sm text-white">{testServer} / {testTool}</p>
+                                <p className="font-semibold text-sm text-white">
+                                    {testServer} / {testTool}
+                                </p>
                             </div>
                             <button
-                                onClick={() => { setTestServer(null); setTestTool(null); setTestResult(null); }}
+                                onClick={() => {
+                                    setTestServer(null);
+                                    setTestTool(null);
+                                    setTestResult(null);
+                                }}
                                 className="text-slate-500 hover:text-white transition text-lg"
                             >
                                 ✕
@@ -393,10 +417,13 @@ export default function McpPanel() {
                         {testResult !== null && (
                             <div className="flex flex-col gap-1">
                                 <p className="text-xs text-slate-400">Résultat</p>
-                                <pre className={`rounded-xl border px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words ${testResult.startsWith("[Erreur]")
-                                    ? "border-red-400/30 bg-red-500/10 text-red-300"
-                                    : "border-emerald-400/20 bg-emerald-500/5 text-emerald-200"
-                                    }`}>
+                                <pre
+                                    className={`rounded-xl border px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words ${
+                                        testResult.startsWith("[Erreur]")
+                                            ? "border-red-400/30 bg-red-500/10 text-red-300"
+                                            : "border-emerald-400/20 bg-emerald-500/5 text-emerald-200"
+                                    }`}
+                                >
                                     {testResult}
                                 </pre>
                             </div>
@@ -407,4 +434,4 @@ export default function McpPanel() {
         </div>
     );
 }
-    const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));

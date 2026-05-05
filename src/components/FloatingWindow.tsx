@@ -36,13 +36,21 @@ export default function FloatingWindow({
         const screenH = window.innerHeight;
         return Math.min(defaultHeight, Math.max(200, screenH - 80));
     };
-    
+
     const adaptiveW = getAdaptiveWidth();
     const adaptiveH = getAdaptiveHeight();
-    
+
     const [pos, setPos] = useState(() => ({
-        x: defaultX ?? (typeof window !== "undefined" ? Math.max(0, Math.min((window.innerWidth - adaptiveW) / 2, window.innerWidth - adaptiveW)) : 0),
-        y: defaultY ?? (typeof window !== "undefined" ? Math.max(0, Math.min((window.innerHeight - adaptiveH) / 4, window.innerHeight - adaptiveH - 40)) : 0),
+        x:
+            defaultX ??
+            (typeof window !== "undefined"
+                ? Math.max(0, Math.min((window.innerWidth - adaptiveW) / 2, window.innerWidth - adaptiveW))
+                : 0),
+        y:
+            defaultY ??
+            (typeof window !== "undefined"
+                ? Math.max(0, Math.min((window.innerHeight - adaptiveH) / 4, window.innerHeight - adaptiveH - 40))
+                : 0),
     }));
     const [size, setSize] = useState({ w: adaptiveW, h: adaptiveH });
     const [minimized, setMinimized] = useState(false);
@@ -89,7 +97,7 @@ export default function FloatingWindow({
         },
         [size],
     );
-    
+
     // Min sizes adaptatifs au viewport
     const getMinWidth = () => Math.min(280, window.innerWidth - 40);
     const getMinHeight = () => Math.min(200, window.innerHeight - 80);
