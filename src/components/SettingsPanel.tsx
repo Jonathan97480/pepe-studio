@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useModelSettings, type TurboQuantType } from "../context/ModelSettingsContext";
 import { CONTEXT7_STORAGE_KEY } from "../tools/Context7Client";
-import { BRAVE_SEARCH_KEY, SERPER_SEARCH_KEY, TAVILY_SEARCH_KEY } from "../tools/SearchWeb";
+import { BRAVE_SEARCH_KEY, SERPER_SEARCH_KEY, TAVILY_SEARCH_KEY, SEARXNG_URL_KEY } from "../tools/SearchWeb";
 import { useErrorToast } from "../hooks/useErrorToast";
 import { ErrorToast } from "./chat/ErrorToast";
 
@@ -32,6 +32,7 @@ export default function SettingsPanel() {
     const [braveKey, setBraveKey] = useState(() => localStorage.getItem(BRAVE_SEARCH_KEY) ?? "");
     const [serperKey, setSerperKey] = useState(() => localStorage.getItem(SERPER_SEARCH_KEY) ?? "");
     const [tavilyKey, setTavilyKey] = useState(() => localStorage.getItem(TAVILY_SEARCH_KEY) ?? "");
+    const [searxngUrl, setSearxngUrl] = useState(() => localStorage.getItem(SEARXNG_URL_KEY) ?? "");
     const [searchSaved, setSearchSaved] = useState(false);
 
     // ── État serveur API ──────────────────────────────────────────────────────
@@ -73,6 +74,7 @@ export default function SettingsPanel() {
         localStorage.setItem(BRAVE_SEARCH_KEY, braveKey.trim());
         localStorage.setItem(SERPER_SEARCH_KEY, serperKey.trim());
         localStorage.setItem(TAVILY_SEARCH_KEY, tavilyKey.trim());
+        localStorage.setItem(SEARXNG_URL_KEY, searxngUrl.trim());
         setSearchSaved(true);
         setTimeout(() => setSearchSaved(false), 2000);
     };
@@ -226,8 +228,8 @@ export default function SettingsPanel() {
                 <div>
                     <h3 className="font-semibold text-sm text-white">Recherche Web</h3>
                     <p className="text-xs text-slate-400 mt-1">
-                        DuckDuckGo est gratuit et ne nécessite pas de clé. Les autres moteurs offrent de meilleurs
-                        résultats avec une clé API.
+                        DuckDuckGo est gratuit et ne nécessite pas de clé. SearXNG est gratuit et open-source.
+                        Les autres moteurs offrent de meilleurs résultats avec une clé API.
                     </p>
                 </div>
                 <label className="flex flex-col gap-1">
@@ -289,6 +291,22 @@ export default function SettingsPanel() {
                         placeholder="tvly-…"
                         className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition focus:border-blue-400 font-mono text-sm"
                     />
+                </label>
+                <label className="flex flex-col gap-1">
+                    <span className="text-sm text-slate-300">
+                        SearXNG — URL du serveur (gratuit, aucune clé requise)
+                    </span>
+                    <input
+                        type="text"
+                        value={searxngUrl}
+                        onChange={(e) => setSearxngUrl(e.target.value)}
+                        placeholder="https://searxng.example.com ou http://localhost:8888"
+                        className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none transition focus:border-blue-400 font-mono text-sm"
+                    />
+                    <p className="text-xs text-slate-500">
+                        Utilise une instance SearXNG publique ou privée. Ex :{" "}
+                        <span className="text-slate-400">https://searx.be</span>
+                    </p>
                 </label>
                 <button
                     onClick={saveSearchKeys}

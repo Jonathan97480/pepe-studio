@@ -924,8 +924,12 @@ async fn execute_tool_inner(state: &ProxyState, name: &str, args: &Value) -> Res
                 .get("locale")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let searxng_url = args
+                .get("searxng_url")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
-            let results = search_web(query, source, api_key, locale).await?;
+            let results = search_web(query, source, api_key, locale, searxng_url).await?;
             serde_json::to_value(results).map_err(|e| e.to_string())
         }
         "scrape_url" => {

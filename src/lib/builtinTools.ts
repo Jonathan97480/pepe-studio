@@ -9,7 +9,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     { id: "terminal",   label: "Terminal PowerShell",    icon: "🖥",  description: "Exécuter des commandes PowerShell (cmd ponctuel, terminaux persistants)" },
     { id: "skills",     label: "Gestion des Skills",     icon: "🧩", description: "Créer et exécuter des skills PS1, Python, Node.js, HTTP, composite" },
     { id: "http",       label: "Appels HTTP / REST",     icon: "🌐", description: "Requêtes HTTP directes (GET, POST, PUT, DELETE, PATCH)" },
-    { id: "search_web", label: "Recherche Web",          icon: "🔍", description: "Chercher des infos en temps réel (DuckDuckGo, Brave, Serper, Tavily)" },
+    { id: "search_web", label: "Recherche Web",          icon: "🔍", description: "Chercher des infos en temps réel (DuckDuckGo, Brave, Serper, Tavily, SearXNG)" },
     { id: "scrape_url", label: "Web Scraping",           icon: "📄", description: "Extraire le contenu d'une page web (statique ou JavaScript)" },
     { id: "files",      label: "Fichiers disque",        icon: "📁", description: "Lire, écrire et patcher des fichiers sur le disque" },
     { id: "images",     label: "Gestion d'images",       icon: "🖼", description: "Sauvegarder et télécharger des images (data URL / URL HTTP)" },

@@ -17,6 +17,7 @@ pub async fn search_web(
     source: Option<String>,
     api_key: Option<String>,
     locale: Option<String>,
+    searxng_url: Option<String>,
 ) -> Result<Vec<SearchResult>, String> {
     let q = query.trim().to_string();
     if q.is_empty() {
@@ -29,6 +30,7 @@ pub async fn search_web(
         "brave"  => search_brave(q, api_key, locale).await,
         "serper" => search_serper(q, api_key, locale).await,
         "tavily" => search_tavily(q, api_key).await,
+        "searxng" => search_searxng(q, searxng_url, locale).await,
         _        => search_duckduckgo(q, locale).await,
     }
 }
@@ -273,6 +275,55 @@ async fn search_tavily(query: String, api_key: Option<String>) -> Result<Vec<Sea
             source:  "tavily".to_string(),
         })
     }).collect();
+    Ok(results)
+}
+
+// ── SearXNG (instance publique ou privée) ──────────────────────────────────────
+
+async fn search_searxng(query: String, base_url: Option<String>, locale: Option<String>) -> Result<Vec<SearchResult>, String> {
+    let url = base_url
+        .filter(|u| !u.trim().is_empty())
+        .ok_or("URL du serveur SearXNG manquante. Va dans Paramètres → Configuration et renseigne l'URL de ton instance SearXNG.")?;
+
+    let base_url_clean = url.trim_end_matches('/');
+    let lang = locale.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or("fr");
+    let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
+    let req_url = format!("{}/search?q={}&format=json&language={}", base_url_clean, encoded, lang);
+
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    ));
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .default_headers(headers)
+        .build()
+        .map_err(|e| format!("Erreur client HTTP: {e}"))?;
+
+    let resp: serde_json::Value = client
+        .get(&req_url)
+        .send()
+        .await
+        .map_err(|e| format!("Erreur SearXNG: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("Erreur JSON SearXNG: {e}"))?;
+
+    let empty = vec![];
+    let items = resp["results"].as_array().unwrap_or(&empty);
+    let results: Vec<SearchResult> = items.iter().take(10).filter_map(|item| {
+        Some(SearchResult {
+            title:   item["title"].as_str()?.to_string(),
+            snippet: item["content"].as_str().unwrap_or("").to_string(),
+            url:     item["url"].as_str()?.to_string(),
+            source:  "searxng".to_string(),
+        })
+    }).collect();
+
+    if results.is_empty() {
+        return Err("Aucun résultat trouvé sur SearXNG".to_string());
+    }
     Ok(results)
 }
 
