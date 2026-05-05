@@ -27,6 +27,7 @@ export default function Layout() {
     const [browserNav, setBrowserNav] = useState<{ url: string; nav: number }>({ url: "", nav: 0 });
     const [browserOpen, setBrowserOpen] = useState(false);
     const [terminalOpen, setTerminalOpen] = useState(false);
+    const [sidebarOpen, setSidebarOpen] = useState(true);
 
     /** Appelée par ChatWindow pour ouvrir une URL dans le navigateur flottant */
     const openBrowserUrl = (newUrl: string) => {
@@ -94,7 +95,9 @@ export default function Layout() {
         <SkillsProvider>
             <div className="relative flex h-screen overflow-hidden bg-[#0f1115] text-white">
                 <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(96,165,250,0.18),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(168,85,247,0.16),_transparent_24%)]" />
-                <aside className="relative z-10 w-[280px] border-r border-white/10 bg-white/10 backdrop-blur-3xl shadow-2xl shadow-slate-950/20">
+                <aside className={`relative z-20 transition-all duration-300 border-r border-white/10 bg-white/10 backdrop-blur-3xl shadow-2xl shadow-slate-950/20 ${
+                    sidebarOpen ? "lg:w-[280px] md:w-16 w-0" : "lg:w-16 md:w-16 w-0"
+                }`}>
                     <Sidebar
                         items={items}
                         onSelect={setActiveTab}
@@ -105,10 +108,10 @@ export default function Layout() {
                         onNewConversation={handleNewConversation}
                         onSelectConversation={handleSelectConversation}
                         onDeleteConversation={handleDeleteConversation}
-                        onDeleteAll={handleDeleteAll}
-                    />
+                        onDeleteAll={handleDeleteAll}                        isCollapsed={!sidebarOpen}
+                        onToggleSidebar={() => setSidebarOpen(v => !v)}                    />
                 </aside>
-                <main className="relative z-10 flex-1 flex flex-col overflow-hidden">
+                <main className="relative z-10 flex-1 flex flex-col overflow-hidden md:flex lg:flex hidden">
                     {activeTab !== "Chat" && (
                         <div className="border-b border-white/10 bg-white/5 px-6 py-4 backdrop-blur-2xl">
                             <div className="flex items-center justify-between gap-4">

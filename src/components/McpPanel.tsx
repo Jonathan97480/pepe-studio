@@ -190,33 +190,35 @@ export default function McpPanel() {
     return (
         <div className="flex h-full flex-col overflow-hidden text-white">
             {/* ── Header ── */}
-            <div className="flex items-center justify-between border-b border-white/10 bg-white/5 px-6 py-4">
-                <div>
-                    <h2 className="font-bold text-lg">Serveurs MCP</h2>
-                    <p className="text-xs text-slate-400 mt-0.5">
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between border-b border-white/10 bg-white/5 px-3 md:px-6 py-3 md:py-4 gap-3 md:gap-0">
+                <div className="flex-1">
+                    <h2 className="font-bold text-base md:text-lg">Serveurs MCP</h2>
+                    <p className="text-xs text-slate-400 mt-0.5 hidden md:block">
                         Créez et testez vos outils MCP (Model Context Protocol) — scripts Node.js JSON-RPC 2.0
                     </p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 w-full md:w-auto">
                     <button
                         onClick={refresh}
                         disabled={loadingList}
-                        className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-300 transition hover:bg-white/10 disabled:opacity-50"
+                        className="flex-1 md:flex-initial rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs md:text-sm text-slate-300 transition hover:bg-white/10 disabled:opacity-50"
                     >
-                        {loadingList ? "…" : "🔄"} Rafraîchir
+                        <span className="hidden md:inline">{loadingList ? "…" : "🔄"} Rafraîchir</span>
+                        <span className="md:hidden">{loadingList ? "…" : "🔄"}</span>
                     </button>
                     <button
                         onClick={() => setShowCreate((v) => !v)}
-                        className="rounded-2xl border border-blue-400/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-300 transition hover:bg-blue-500/20"
+                        className="flex-1 md:flex-initial rounded-2xl border border-blue-400/30 bg-blue-500/10 px-3 py-2 text-xs md:text-sm text-blue-300 transition hover:bg-blue-500/20"
                     >
-                        ＋ Nouveau serveur
+                        <span className="hidden md:inline">＋ Nouveau serveur</span>
+                        <span className="md:hidden">＋</span>
                     </button>
                 </div>
             </div>
 
-            <div className="flex flex-1 min-h-0 gap-0">
+            <div className="flex flex-col lg:flex-row flex-1 min-h-0 gap-0">
                 {/* ── Liste des serveurs ── */}
-                <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+                <div className="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6 flex flex-col gap-4 border-b lg:border-b-0 lg:border-r border-white/10">
 
                     {/* Formulaire de création */}
                     {showCreate && (

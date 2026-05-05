@@ -25,11 +25,26 @@ export default function FloatingWindow({
     defaultY,
     children,
 }: FloatingWindowProps) {
+    // Sizes adaptatifs au viewport
+    const getAdaptiveWidth = () => {
+        if (typeof window === "undefined") return defaultWidth;
+        const screenW = window.innerWidth;
+        return Math.min(defaultWidth, Math.max(280, screenW - 40));
+    };
+    const getAdaptiveHeight = () => {
+        if (typeof window === "undefined") return defaultHeight;
+        const screenH = window.innerHeight;
+        return Math.min(defaultHeight, Math.max(200, screenH - 80));
+    };
+    
+    const adaptiveW = getAdaptiveWidth();
+    const adaptiveH = getAdaptiveHeight();
+    
     const [pos, setPos] = useState(() => ({
-        x: defaultX ?? (typeof window !== "undefined" ? Math.max(0, (window.innerWidth - defaultWidth) / 2) : 0),
-        y: defaultY ?? (typeof window !== "undefined" ? Math.max(0, (window.innerHeight - defaultHeight) / 4) : 0),
+        x: defaultX ?? (typeof window !== "undefined" ? Math.max(0, Math.min((window.innerWidth - adaptiveW) / 2, window.innerWidth - adaptiveW)) : 0),
+        y: defaultY ?? (typeof window !== "undefined" ? Math.max(0, Math.min((window.innerHeight - adaptiveH) / 4, window.innerHeight - adaptiveH - 40)) : 0),
     }));
-    const [size, setSize] = useState({ w: defaultWidth, h: defaultHeight });
+    const [size, setSize] = useState({ w: adaptiveW, h: adaptiveH });
     const [minimized, setMinimized] = useState(false);
 
     const dragging = useRef(false);
@@ -42,10 +57,13 @@ export default function FloatingWindow({
     const wasOpen = useRef(false);
     useEffect(() => {
         if (open && !wasOpen.current) {
+            const w = getAdaptiveWidth();
+            const h = getAdaptiveHeight();
             setPos({
-                x: defaultX ?? Math.max(0, (window.innerWidth - size.w) / 2),
-                y: defaultY ?? Math.max(0, (window.innerHeight - size.h) / 4),
+                x: defaultX ?? Math.max(0, Math.min((window.innerWidth - w) / 2, window.innerWidth - w)),
+                y: defaultY ?? Math.max(0, Math.min((window.innerHeight - h) / 4, window.innerHeight - h - 40)),
             });
+            setSize({ w, h });
             setMinimized(false);
         }
         wasOpen.current = open;
@@ -71,21 +89,28 @@ export default function FloatingWindow({
         },
         [size],
     );
+    
+    // Min sizes adaptatifs au viewport
+    const getMinWidth = () => Math.min(280, window.innerWidth - 40);
+    const getMinHeight = () => Math.min(200, window.innerHeight - 80);
 
     useEffect(() => {
         const onMouseMove = (e: MouseEvent) => {
             if (dragging.current) {
+                const minW = getMinWidth();
                 setPos({
-                    x: Math.max(0, Math.min(e.clientX - dragOffset.current.x, window.innerWidth - size.w)),
+                    x: Math.max(0, Math.min(e.clientX - dragOffset.current.x, window.innerWidth - minW)),
                     y: Math.max(0, Math.min(e.clientY - dragOffset.current.y, window.innerHeight - 40)),
                 });
             }
             if (resizing.current) {
                 const dx = e.clientX - resizeStart.current.x;
                 const dy = e.clientY - resizeStart.current.y;
+                const minW = getMinWidth();
+                const minH = getMinHeight();
                 setSize({
-                    w: Math.max(400, resizeStart.current.w + dx),
-                    h: Math.max(260, resizeStart.current.h + dy),
+                    w: Math.max(minW, resizeStart.current.w + dx),
+                    h: Math.max(minH, resizeStart.current.h + dy),
                 });
             }
         };
@@ -118,22 +143,22 @@ export default function FloatingWindow({
         >
             {/* ── Barre de titre ── */}
             <div
-                className="flex shrink-0 cursor-grab items-center gap-2 border-b border-white/10 bg-white/5 px-4 py-2.5 select-none active:cursor-grabbing"
+                className="flex shrink-0 cursor-grab items-center gap-2 border-b border-white/10 bg-white/5 px-3 md:px-4 py-2 md:py-2.5 select-none active:cursor-grabbing"
                 onMouseDown={onHeaderMouseDown}
             >
-                <span className="text-base">{icon}</span>
-                <span className="flex-1 text-sm font-semibold text-white">{title}</span>
+                <span className="text-sm md:text-base">{icon}</span>
+                <span className="flex-1 text-xs md:text-sm font-semibold text-white truncate">{title}</span>
                 <button
                     onClick={() => setMinimized((v) => !v)}
                     title={minimized ? "Restaurer" : "Réduire"}
-                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 transition hover:bg-white/10 hover:text-white"
+                    className="flex h-5 w-5 md:h-6 md:w-6 items-center justify-center rounded-lg text-xs text-slate-400 transition hover:bg-white/10 hover:text-white"
                 >
                     {minimized ? "▲" : "▼"}
                 </button>
                 <button
                     onClick={onClose}
                     title="Fermer"
-                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-500/20 hover:text-red-400"
+                    className="flex h-5 w-5 md:h-6 md:w-6 items-center justify-center rounded-lg text-xs text-slate-400 transition hover:bg-red-500/20 hover:text-red-400"
                 >
                     ✕
                 </button>
@@ -145,7 +170,7 @@ export default function FloatingWindow({
             {/* ── Poignée de redimensionnement ── */}
             {!minimized && (
                 <div
-                    className="absolute bottom-0 right-0 h-4 w-4 cursor-se-resize"
+                    className="absolute bottom-0 right-0 h-3 w-3 md:h-4 md:w-4 cursor-se-resize hidden md:block"
                     onMouseDown={onResizeMouseDown}
                     title="Redimensionner"
                 >
