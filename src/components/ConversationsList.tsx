@@ -33,6 +33,7 @@ export default function ConversationsList({
     const [conversations, setConversations] = useState<ConversationItem[]>([]);
     const [hoveredId, setHoveredId] = useState<number | null>(null);
     const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+    const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(null);
     const { toasts, showError, dismiss } = useErrorToast();
 
     const loadConversations = useCallback(() => {
@@ -47,12 +48,21 @@ export default function ConversationsList({
 
     const handleDelete = (e: React.MouseEvent, id: number) => {
         e.stopPropagation();
+        setConfirmingDeleteId(id);
+    };
+
+    const confirmDelete = () => {
+        if (confirmingDeleteId === null) return;
+        const id = confirmingDeleteId;
         invoke("delete_conversation", { conversationId: id })
             .then(() => {
                 setConversations((prev) => prev.filter((c) => c.id !== id));
                 onDeleteConversation(id);
+                setConfirmingDeleteId(null);
             })
-            .catch((err) => showError(`Impossible de supprimer la conversation : ${(err as Error)?.message ?? String(err)}`));
+            .catch((err) =>
+                showError(`Impossible de supprimer la conversation : ${(err as Error)?.message ?? String(err)}`),
+            );
     };
 
     // Grouper par label de date
@@ -66,7 +76,10 @@ export default function ConversationsList({
     const groupOrder = ["Aujourd'hui", "Hier", "7 derniers jours"];
     const sortedGroupKeys = [
         ...groupOrder.filter((k) => groups[k]),
-        ...Object.keys(groups).filter((k) => !groupOrder.includes(k)).sort().reverse(),
+        ...Object.keys(groups)
+            .filter((k) => !groupOrder.includes(k))
+            .sort()
+            .reverse(),
     ];
 
     return (
@@ -105,9 +118,7 @@ export default function ConversationsList({
             {/* Liste groupée */}
             {sortedGroupKeys.map((groupKey) => (
                 <div key={groupKey}>
-                    <p className="mb-1 mt-2 px-2 text-[10px] uppercase tracking-widest text-slate-500">
-                        {groupKey}
-                    </p>
+                    <p className="mb-1 mt-2 px-2 text-[10px] uppercase tracking-widest text-slate-500">{groupKey}</p>
                     {groups[groupKey].map((conv) => {
                         const isActive = conv.id === activeConversationId;
                         return (
@@ -123,9 +134,7 @@ export default function ConversationsList({
                                 }`}
                             >
                                 <span className="truncate pr-6 leading-snug">
-                                    {conv.title.length > 42
-                                        ? conv.title.slice(0, 42) + "…"
-                                        : conv.title}
+                                    {conv.title.length > 42 ? conv.title.slice(0, 42) + "…" : conv.title}
                                 </span>
                                 {hoveredId === conv.id && (
                                     <span
@@ -144,11 +153,35 @@ export default function ConversationsList({
             ))}
 
             {conversations.length === 0 && (
-                <p className="px-2 py-4 text-center text-xs text-slate-500">
-                    Aucune conversation sauvegardée
-                </p>
+                <p className="px-2 py-4 text-center text-xs text-slate-500">Aucune conversation sauvegardée</p>
             )}
             <ErrorToast toasts={toasts} onDismiss={dismiss} />
+
+            {/* Modal de confirmation de suppression */}
+            {confirmingDeleteId !== null && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                    <div className="rounded-2xl bg-slate-900 border border-white/10 shadow-xl p-6 max-w-sm mx-4">
+                        <h3 className="text-base font-semibold text-white mb-3">Supprimer la conversation ?</h3>
+                        <p className="text-sm text-slate-400 mb-6">
+                            Cette action est irréversible. La conversation sera définitivement supprimée.
+                        </p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setConfirmingDeleteId(null)}
+                                className="flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/10"
+                            >
+                                Annuler
+                            </button>
+                            <button
+                                onClick={confirmDelete}
+                                className="flex-1 rounded-lg bg-red-500/30 border border-red-500/40 px-4 py-2 text-sm text-red-400 transition hover:bg-red-500/50 hover:text-red-300"
+                            >
+                                Supprimer
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
