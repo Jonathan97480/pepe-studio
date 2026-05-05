@@ -2,6 +2,8 @@
 
 import React, { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
+import { useErrorToast } from "../hooks/useErrorToast";
+import { ErrorToast } from "./chat/ErrorToast";
 
 type ConversationItem = {
     id: number;
@@ -31,12 +33,13 @@ export default function ConversationsList({
     const [conversations, setConversations] = useState<ConversationItem[]>([]);
     const [hoveredId, setHoveredId] = useState<number | null>(null);
     const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+    const { toasts, showError, dismiss } = useErrorToast();
 
     const loadConversations = useCallback(() => {
         invoke<ConversationItem[]>("list_conversations")
             .then((list) => setConversations(list))
-            .catch(() => { /* silencieux */ });
-    }, []);
+            .catch((e) => showError(`Impossible de charger les conversations : ${(e as Error)?.message ?? String(e)}`));
+    }, [showError]);
 
     useEffect(() => {
         loadConversations();
@@ -49,7 +52,7 @@ export default function ConversationsList({
                 setConversations((prev) => prev.filter((c) => c.id !== id));
                 onDeleteConversation(id);
             })
-            .catch(() => { /* silencieux */ });
+            .catch((err) => showError(`Impossible de supprimer la conversation : ${(err as Error)?.message ?? String(err)}`));
     };
 
     // Grouper par label de date
@@ -145,6 +148,7 @@ export default function ConversationsList({
                     Aucune conversation sauvegardée
                 </p>
             )}
+            <ErrorToast toasts={toasts} onDismiss={dismiss} />
         </div>
     );
 }

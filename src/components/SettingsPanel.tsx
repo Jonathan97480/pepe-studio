@@ -5,6 +5,8 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { useModelSettings, type TurboQuantType } from "../context/ModelSettingsContext";
 import { CONTEXT7_STORAGE_KEY } from "../tools/Context7Client";
 import { BRAVE_SEARCH_KEY, SERPER_SEARCH_KEY, TAVILY_SEARCH_KEY } from "../tools/SearchWeb";
+import { useErrorToast } from "../hooks/useErrorToast";
+import { ErrorToast } from "./chat/ErrorToast";
 
 export default function SettingsPanel() {
     const {
@@ -21,6 +23,8 @@ export default function SettingsPanel() {
         setSystemPrompt,
         setTurboQuant,
     } = useModelSettings();
+
+    const { toasts, showError, dismiss } = useErrorToast();
 
     const [context7Key, setContext7Key] = useState(() => localStorage.getItem(CONTEXT7_STORAGE_KEY) ?? "");
     const [context7Saved, setContext7Saved] = useState(false);
@@ -50,7 +54,9 @@ export default function SettingsPanel() {
     const toggleApiServer = async () => {
         setApiError(null);
         if (apiRunning) {
-            await invoke("stop_api_server").catch(() => {});
+            await invoke("stop_api_server").catch((e) =>
+                showError(`Impossible d'arrêter le serveur API : ${(e as Error)?.message ?? String(e)}`),
+            );
             setApiRunning(false);
         } else {
             try {
@@ -350,6 +356,7 @@ export default function SettingsPanel() {
                     </p>
                 )}
             </div>
+            <ErrorToast toasts={toasts} onDismiss={dismiss} />
         </div>
     );
 }

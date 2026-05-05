@@ -30,6 +30,8 @@ import { useFileAttachments } from "../hooks/useFileAttachments";
 import { autoConfigureFromHardware, type HardwareInfo } from "../lib/hardwareConfig";
 import { inspectModelMetadata } from "../lib/modelMetadata";
 import { useAutoCompact } from "../hooks/useAutoCompact";
+import { useErrorToast } from "../hooks/useErrorToast";
+import { ErrorToast } from "./chat/ErrorToast";
 
 export default function ChatWindow({
     convRequest,
@@ -145,6 +147,9 @@ export default function ChatWindow({
     // ── Voice / TTS / Micro ───────────────────────────────────────────────────
     const { isListening, isSpeaking, ttsEnabled, setTtsEnabled, speakText, handleMic, stopSpeaking } = useVoice();
 
+    // ── Gestion des erreurs UI ────────────────────────────────────────────────
+    const { toasts: errorToasts, showError, dismiss: dismissToast } = useErrorToast();
+
     // ── Chargement de conversation ────────────────────────────────────────────
     const {
         conversationId,
@@ -164,6 +169,7 @@ export default function ChatWindow({
         resetMessages,
         modelPath,
         onConversationReady,
+        onError: showError,
     });
 
     // ── Hooks extraits ────────────────────────────────────────────────────────
@@ -467,7 +473,7 @@ export default function ChatWindow({
             setAttachments([]);
             if (textareaRef.current) textareaRef.current.style.height = "auto";
         } catch (error) {
-            console.error(error);
+            showError(`Erreur lors de l'envoi : ${(error as Error)?.message ?? String(error)}`);
         }
     };
 
@@ -497,7 +503,7 @@ export default function ChatWindow({
             setIsModelLoaded(true);
             setLoadedModelPath(loadedModelPath);
         } catch (error) {
-            console.error("[ChatWindow] handleToggleThinking reload failed", error);
+            showError(`Impossible de changer le mode de réflexion : ${(error as Error)?.message ?? String(error)}`);
         }
     };
 
@@ -520,7 +526,7 @@ export default function ChatWindow({
                 thinkingEnabled,
             });
         } catch (e) {
-            console.error(e);
+            showError(`Erreur lors du renvoi du message : ${(e as Error)?.message ?? String(e)}`);
         }
     };
 
@@ -532,6 +538,7 @@ export default function ChatWindow({
 
     return (
         <div className="flex h-full flex-col overflow-hidden">
+            <ErrorToast toasts={errorToasts} onDismiss={dismissToast} />
             <ChatHeader
                 chatMode={chatMode}
                 onModeChange={applyMode}

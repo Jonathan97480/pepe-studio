@@ -7,6 +7,7 @@ type ConversationLoaderOptions = {
     resetMessages: (msgs?: LlamaMessage[]) => void;
     modelPath: string;
     onConversationReady?: (id: number) => void;
+    onError?: (message: string) => void;
 };
 
 type ConversationLoaderResult = {
@@ -31,6 +32,7 @@ export function useConversationLoader({
     resetMessages,
     modelPath,
     onConversationReady,
+    onError,
 }: ConversationLoaderOptions): ConversationLoaderResult {
     const [conversationId, setConversationId] = useState<number | null>(null);
     const [isLoadingConv, setIsLoadingConv] = useState(false);
@@ -102,7 +104,9 @@ export function useConversationLoader({
                     if (plan) setPlanContent(plan);
                     onConversationReady?.(requestedId);
                 })
-                .catch(() => {})
+                .catch((e) =>
+                    onError?.(`Impossible de charger la conversation : ${(e as Error)?.message ?? String(e)}`),
+                )
                 .finally(() => setIsLoadingConv(false));
         } else {
             invoke<number>("start_conversation", { modelName: modelPath || "inconnu" })
@@ -111,7 +115,9 @@ export function useConversationLoader({
                     convTitleSetRef.current = false;
                     onConversationReady?.(id);
                 })
-                .catch(() => {});
+                .catch((e) =>
+                    onError?.(`Impossible de démarrer la conversation : ${(e as Error)?.message ?? String(e)}`),
+                );
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [convRequest?.key]);
