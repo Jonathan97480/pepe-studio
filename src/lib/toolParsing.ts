@@ -95,6 +95,11 @@ export const normalizeToolTags = (text: string): string => {
     );
 
     t = t.replace(/<get_browser_errors[^>]*\/?>/gi, '<tool>{"get_browser_errors": true}</tool>');
+    t = t.replace(
+        /<start_dev_server\s+path="([^"]*)"(?:\s*\/?>\s*(?:<\/start_dev_server>)?)/gi,
+        (_, p) => `<tool>{"start_dev_server": ${JSON.stringify(p)}}</tool>`,
+    );
+
     t = t.replace(/<stop_dev_server[^>]*\/?>/gi, '<tool>{"stop_dev_server": true}</tool>');
     t = t.replace(/<get_dev_server_info[^>]*\/?>/gi, '<tool>{"get_dev_server_info": true}</tool>');
 
