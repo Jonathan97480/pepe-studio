@@ -178,7 +178,6 @@ export default function ChatWindow({
         deepThinkingEnabled,
         isEnabled,
         chatModeRef,
-        modelPath,
     });
 
     const { compactToast } = useAutoCompact({
