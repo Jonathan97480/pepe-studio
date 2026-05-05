@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useRef, useEffect } from "react";
+import React, { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useLlama, type LlamaMessage, type Attachment } from "../hooks/useLlama";
 import { retrieveChunks } from "../lib/ragRetrieval";
@@ -33,6 +33,11 @@ import { useAutoCompact } from "../hooks/useAutoCompact";
 import { useErrorToast } from "../hooks/useErrorToast";
 import { ErrorToast } from "./chat/ErrorToast";
 
+type QueuedPrompt = {
+    prompt: string;
+    attachments: Attachment[];
+};
+
 export default function ChatWindow({
     convRequest,
     onConversationReady,
@@ -53,7 +58,6 @@ export default function ChatWindow({
         streaming,
         tokenUsage,
         sendPrompt,
-        pushUserMessage,
         loadModel,
         stopModel,
         deleteMessage,
@@ -109,6 +113,8 @@ export default function ChatWindow({
     const [showSDFormatPicker, setShowSDFormatPicker] = useState(false);
     const [liveImagePreview, setLiveImagePreview] = useState<string | null>(null);
     const [liveImageProgress, setLiveImageProgress] = useState<number>(0);
+    const [pendingQueue, setPendingQueue] = useState<QueuedPrompt[]>([]);
+    const isQueueProcessingRef = useRef(false);
     const chatModeRef = useRef<ChatMode>("plan");
     const [pendingQuestion, setPendingQuestion] = useState<{
         question: string;
@@ -324,10 +330,8 @@ export default function ChatWindow({
         }));
     };
 
-    const handleSend = async () => {
-        if (!prompt.trim() || isIndexing) return;
+    const processQueuedMessage = useCallback(async ({ prompt: queuedPrompt, attachments: queuedAttachments }: QueuedPrompt) => {
         setAutoLoadError(null);
-        pushUserMessage(prompt, attachments);
 
         let effectiveConfig: Partial<LlamaLaunchConfig> = {
             modelPath,
@@ -422,14 +426,15 @@ export default function ChatWindow({
         }
 
         try {
-            const ragDocIds = attachments.filter((a) => a.docId != null).map((a) => a.docId as number);
-            let finalAttachments: Attachment[] | undefined = attachments.length > 0 ? attachments : undefined;
+            const ragDocIds = queuedAttachments.filter((a) => a.docId != null).map((a) => a.docId as number);
+            let finalAttachments: Attachment[] | undefined =
+                queuedAttachments.length > 0 ? queuedAttachments : undefined;
 
-            if (ragDocIds.length > 0 && prompt.trim()) {
+            if (ragDocIds.length > 0 && queuedPrompt.trim()) {
                 const chunkLimit = Math.max(3, Math.min(40, Math.floor((contextWindow - 1200) / 450)));
-                const ragContext = await retrieveChunks(prompt, ragDocIds, chunkLimit);
-                const nonRagAtts = attachments.filter((a) => a.docId == null);
-                const ragAtts = attachments.filter((a) => a.docId != null);
+                const ragContext = await retrieveChunks(queuedPrompt, ragDocIds, chunkLimit);
+                const nonRagAtts = queuedAttachments.filter((a) => a.docId == null);
+                const ragAtts = queuedAttachments.filter((a) => a.docId != null);
                 const ragNames = ragAtts.map((a) => a.name).join(", ");
                 const contextText =
                     ragContext ||
@@ -441,7 +446,7 @@ export default function ChatWindow({
             lastToolSignatureRef.current = null;
             lastToolWasErrorRef.current = false;
             if (conversationId) {
-                invoke("save_message", { conversationId, role: "user", content: prompt }).catch(() => {});
+                invoke("save_message", { conversationId, role: "user", content: queuedPrompt }).catch(() => {});
             }
             if (!convTitleSetRef.current) {
                 const titleInstr =
@@ -453,9 +458,9 @@ export default function ChatWindow({
             }
             const actionKeywords =
                 /crée|créer|lance|lancer|installe|installer|exécute|exécuter|fais|faire|génère|générer|ouvre|ouvrir|copie|déplace|supprime|écris|écrire|démarre|démarrer|setup|init|configure|build|compile|run|make|create|start/i;
-            let effectivePrompt = actionKeywords.test(prompt)
-                ? `${prompt}\n\n[RAPPEL SYSTÈME: exécute IMMÉDIATEMENT avec <tool>{"cmd":"..."}</tool> ou <tool>{"write_file":"..."}</tool>. Première réponse = un <tool>, pas du texte.]`
-                : prompt;
+            let effectivePrompt = actionKeywords.test(queuedPrompt)
+                ? `${queuedPrompt}\n\n[RAPPEL SYSTÈME: exécute IMMÉDIATEMENT avec <tool>{"cmd":"..."}</tool> ou <tool>{"write_file":"..."}</tool>. Première réponse = un <tool>, pas du texte.]`
+                : queuedPrompt;
             if (projectStructureRef.current.trim()) {
                 effectiveConfig = {
                     ...effectiveConfig,
@@ -468,14 +473,74 @@ export default function ChatWindow({
                 effectivePrompt = `[REPRISE DE CONVERSATION — Lis attentivement l'historique ci-dessus avant de répondre. Tiens compte de tout ce qui a été dit, des fichiers créés, des décisions prises et du contexte du projet.]\n\n${effectivePrompt}`;
                 setIsResumingConv(false);
             }
-            await sendPrompt(effectivePrompt, effectiveConfig, finalAttachments, true);
-            setPrompt("");
-            setAttachments([]);
-            if (textareaRef.current) textareaRef.current.style.height = "auto";
+            await sendPrompt(effectivePrompt, effectiveConfig, finalAttachments);
         } catch (error) {
             showError(`Erreur lors de l'envoi : ${(error as Error)?.message ?? String(error)}`);
         }
+    }, [
+        modelPath,
+        temperature,
+        contextWindow,
+        evalBatchSize,
+        flashAttention,
+        sampling,
+        reasoningBudget,
+        thinkingEnabled,
+        machineContext,
+        systemPrompt,
+        turboQuant,
+        isModelLoaded,
+        loadModel,
+        setContextWindow,
+        setEvalBatchSize,
+        setFlashAttention,
+        setIsModelLoaded,
+        setLoadedModelPath,
+        setModelPath,
+        setReasoningBudget,
+        setSystemPrompt,
+        setTemperature,
+        setThinkingEnabled,
+        setTurboQuant,
+        showError,
+        conversationId,
+        convTitleSetRef,
+        isResumingConv,
+        setIsResumingConv,
+        projectStructureRef,
+        sendPrompt,
+    ]);
+
+    const handleSend = () => {
+        const trimmedPrompt = prompt.trim();
+        if (!trimmedPrompt || isIndexing) return;
+
+        const queuedItem: QueuedPrompt = {
+            prompt: trimmedPrompt,
+            attachments: [...attachments],
+        };
+
+        setPendingQueue((current) => [...current, queuedItem]);
+        setPrompt("");
+        setAttachments([]);
+        if (textareaRef.current) textareaRef.current.style.height = "auto";
     };
+
+    useEffect(() => {
+        if (pendingQueue.length === 0) return;
+        if (isQueueProcessingRef.current) return;
+        if (loading || streaming || toolRunning) return;
+
+        isQueueProcessingRef.current = true;
+        const currentItem = pendingQueue[0];
+
+        processQueuedMessage(currentItem)
+            .finally(() => {
+                setPendingQueue((current) => current.slice(1));
+                isQueueProcessingRef.current = false;
+            });
+        // processQueuedMessage est volontairement dans les deps pour garder la config la plus récente
+    }, [pendingQueue, loading, streaming, toolRunning, processQueuedMessage]);
 
     const handleToggleThinking = async () => {
         const nextThinkingEnabled = !thinkingEnabled;
@@ -738,6 +803,7 @@ export default function ChatWindow({
                     prompt={prompt}
                     onPromptChange={setPrompt}
                     onSend={handleSend}
+                    pendingQueueCount={pendingQueue.length}
                     isContextReady={isContextReady}
                     handleFileSelect={handleFileSelect}
                     isListening={isListening}

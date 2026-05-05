@@ -27,6 +27,7 @@ interface ChatComposerProps {
     prompt: string;
     onPromptChange: (value: string) => void;
     onSend: () => void;
+    pendingQueueCount: number;
     isContextReady: boolean;
     handleFileSelect: React.ChangeEventHandler<HTMLInputElement>;
     isListening: boolean;
@@ -68,6 +69,7 @@ export function ChatComposer({
     prompt,
     onPromptChange,
     onSend,
+    pendingQueueCount,
     isContextReady,
     handleFileSelect,
     isListening,
@@ -320,7 +322,12 @@ export function ChatComposer({
                         🧠 {deepThinkingEnabled ? "Deep" : "No Deep"}
                     </button>
                     <div className="flex-1" />
-                    {loading || streaming ? (
+                    {pendingQueueCount > 0 && (
+                        <div className="rounded-2xl border border-amber-400/35 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-300">
+                            File d&apos;attente: {pendingQueueCount}
+                        </div>
+                    )}
+                    {(loading || streaming) && (
                         <button
                             onClick={onCancelGeneration}
                             className="animate-pulse rounded-3xl bg-red-600/80 px-6 py-2.5 font-medium text-white transition hover:bg-red-500"
@@ -328,15 +335,14 @@ export function ChatComposer({
                         >
                             ⏹ Stop
                         </button>
-                    ) : (
-                        <button
-                            onClick={onSend}
-                            disabled={isIndexing || !isContextReady}
-                            className="rounded-3xl bg-blue-500 px-6 py-2.5 font-medium text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:bg-blue-400/70"
-                        >
-                            {isIndexing ? "⏳ Indexation…" : !isContextReady ? "⏳ Contexte…" : "Envoyer →"}
-                        </button>
                     )}
+                    <button
+                        onClick={onSend}
+                        disabled={isIndexing || !isContextReady}
+                        className="rounded-3xl bg-blue-500 px-6 py-2.5 font-medium text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:bg-blue-400/70"
+                    >
+                        {isIndexing ? "⏳ Indexation…" : !isContextReady ? "⏳ Contexte…" : "Envoyer →"}
+                    </button>
                 </div>
 
                 {(error || autoLoadError) && (
