@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState, useCallback, useEffect } from "react";
+import React, { useRef, useState, useCallback, useEffect, useLayoutEffect } from "react";
 
 interface FloatingWindowProps {
     title: string;
@@ -60,22 +60,26 @@ export default function FloatingWindow({
     const resizing = useRef(false);
     const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 });
     const windowRef = useRef<HTMLDivElement>(null);
+    // Ref stable pour les defaults de position/taille (ne devrait pas changer après mount)
+    const defaultsRef = useRef({ defaultX, defaultY, defaultWidth, defaultHeight });
 
     // Recentrer uniquement à la première ouverture (open passe false → true)
     const wasOpen = useRef(false);
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (open && !wasOpen.current) {
-            const w = getAdaptiveWidth();
-            const h = getAdaptiveHeight();
+            const { defaultX: dx, defaultY: dy, defaultWidth: dw, defaultHeight: dh } = defaultsRef.current;
+            const w = Math.min(dw, Math.max(280, window.innerWidth - 40));
+            const h = Math.min(dh, Math.max(200, window.innerHeight - 80));
+            // Initialisation de position à la première ouverture — setState intentionnel dans useLayoutEffect
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setPos({
-                x: defaultX ?? Math.max(0, Math.min((window.innerWidth - w) / 2, window.innerWidth - w)),
-                y: defaultY ?? Math.max(0, Math.min((window.innerHeight - h) / 4, window.innerHeight - h - 40)),
+                x: dx ?? Math.max(0, Math.min((window.innerWidth - w) / 2, window.innerWidth - w)),
+                y: dy ?? Math.max(0, Math.min((window.innerHeight - h) / 4, window.innerHeight - h - 40)),
             });
             setSize({ w, h });
             setMinimized(false);
         }
         wasOpen.current = open;
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
 
     const onHeaderMouseDown = useCallback(

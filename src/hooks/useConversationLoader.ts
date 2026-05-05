@@ -41,20 +41,37 @@ export function useConversationLoader({
     const [todoItems, setTodoItems] = useState<{ text: string; done: boolean }[]>([]);
     const [projectStructure, setProjectStructure] = useState("");
     const projectStructureRef = useRef("");
-    projectStructureRef.current = projectStructure;
 
     const [planContent, setPlanContent] = useState("");
     const planRef = useRef("");
-    planRef.current = planContent;
 
     const convTitleSetRef = useRef<boolean>(false);
 
+    // Refs stables pour éviter les stale closures sans les mettre en dépendances de l'effet principal
+    const resetMessagesRef = useRef(resetMessages);
+    const modelPathRef = useRef(modelPath);
+    const onConversationReadyRef = useRef(onConversationReady);
+    const onErrorRef = useRef(onError);
+
+    // Synchroniser les refs après chaque render (avant que l'effet principal puisse s'exécuter)
     useEffect(() => {
-        resetMessages();
+        projectStructureRef.current = projectStructure;
+        planRef.current = planContent;
+        resetMessagesRef.current = resetMessages;
+        modelPathRef.current = modelPath;
+        onConversationReadyRef.current = onConversationReady;
+        onErrorRef.current = onError;
+    });
+
+    useEffect(() => {
+        // Reset de l'état à chaque nouvelle requête de conversation — setState intentionnel dans useEffect
+        /* eslint-disable react-hooks/set-state-in-effect */
+        resetMessagesRef.current();
         setConversationId(null);
         setTodoItems([]);
         setProjectStructure("");
         setPlanContent("");
+        /* eslint-enable react-hooks/set-state-in-effect */
 
         const requestedId = convRequest?.id ?? null;
         if (requestedId !== null) {
@@ -96,31 +113,30 @@ export function useConversationLoader({
                             };
                         }),
                     );
-                    resetMessages(llamaMsgs);
+                    resetMessagesRef.current(llamaMsgs);
                     setConversationId(requestedId);
                     convTitleSetRef.current = true;
                     if (llamaMsgs.length > 0) setIsResumingConv(true);
                     if (structure) setProjectStructure(structure);
                     if (plan) setPlanContent(plan);
-                    onConversationReady?.(requestedId);
+                    onConversationReadyRef.current?.(requestedId);
                 })
                 .catch((e) =>
-                    onError?.(`Impossible de charger la conversation : ${(e as Error)?.message ?? String(e)}`),
+                    onErrorRef.current?.(`Impossible de charger la conversation : ${(e as Error)?.message ?? String(e)}`),
                 )
                 .finally(() => setIsLoadingConv(false));
         } else {
-            invoke<number>("start_conversation", { modelName: modelPath || "inconnu" })
+            invoke<number>("start_conversation", { modelName: modelPathRef.current || "inconnu" })
                 .then((id) => {
                     setConversationId(id);
                     convTitleSetRef.current = false;
-                    onConversationReady?.(id);
+                    onConversationReadyRef.current?.(id);
                 })
                 .catch((e) =>
-                    onError?.(`Impossible de démarrer la conversation : ${(e as Error)?.message ?? String(e)}`),
+                    onErrorRef.current?.(`Impossible de démarrer la conversation : ${(e as Error)?.message ?? String(e)}`),
                 );
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [convRequest?.key]);
+    }, [convRequest?.key, convRequest?.id]);
 
     return {
         conversationId,

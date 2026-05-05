@@ -1,5 +1,11 @@
 import { useRef, useState } from "react";
 
+// Web Speech API non standardisée — on déclare le type vendeur proprement
+interface SpeechRecognitionWindow extends Window {
+    SpeechRecognition?: typeof SpeechRecognition;
+    webkitSpeechRecognition?: typeof SpeechRecognition;
+}
+
 type UseVoiceResult = {
     isListening: boolean;
     isSpeaking: boolean;
@@ -46,15 +52,14 @@ export function useVoice(): UseVoiceResult {
             stopListening();
             return;
         }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+        const w = window as SpeechRecognitionWindow;
+        const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
         if (!SR) return;
         const rec = new SR();
         rec.lang = "fr-FR";
         rec.continuous = false;
         rec.interimResults = false;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        rec.onresult = (e: any) => {
+        rec.onresult = (e: SpeechRecognitionEvent) => {
             const transcript = (e.results[0][0].transcript as string).trim();
             onTranscript(transcript);
             setIsListening(false);

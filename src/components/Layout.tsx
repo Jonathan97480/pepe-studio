@@ -22,6 +22,13 @@ const navItems = [
 
 export default function Layout() {
     const [activeTab, setActiveTab] = useState(navItems[0].label);
+    // Lazy-mount: on n'instancie un panneau qu'à la première visite
+    const [visitedTabs, setVisitedTabs] = useState<Set<string>>(new Set([navItems[0].label]));
+
+    const handleTabSelect = (tab: string) => {
+        setActiveTab(tab);
+        setVisitedTabs((prev) => (prev.has(tab) ? prev : new Set([...prev, tab])));
+    };
     const { isModelLoaded, loadedModelPath } = useModelSettings();
     // On stocke {url, nav: compteur} pour forcer le refresh même si l'URL est identique
     const [browserNav, setBrowserNav] = useState<{ url: string; nav: number }>({ url: "", nav: 0 });
@@ -48,12 +55,12 @@ export default function Layout() {
 
     const handleNewConversation = () => {
         setConvRequest((prev) => ({ key: prev.key + 1, id: null }));
-        setActiveTab("Chat");
+        handleTabSelect("Chat");
     };
 
     const handleSelectConversation = (id: number) => {
         setConvRequest((prev) => ({ key: prev.key + 1, id }));
-        setActiveTab("Chat");
+        handleTabSelect("Chat");
     };
 
     const handleDeleteConversation = (id: number) => {
@@ -102,7 +109,7 @@ export default function Layout() {
                 >
                     <Sidebar
                         items={items}
-                        onSelect={setActiveTab}
+                        onSelect={handleTabSelect}
                         isModelLoaded={isModelLoaded}
                         loadedModelName={loadedModelPath?.split(/[/\\]/).pop() ?? null}
                         activeConversationId={activeConversationId}
@@ -161,21 +168,30 @@ export default function Layout() {
                                     onOpenTerminal={openTerminal}
                                 />
                             </div>
-                            <div
-                                style={{ display: activeTab === "Modèles" ? "flex" : "none" }}
-                                className="h-full flex-col"
-                            >
-                                <ModelsPanel />
-                            </div>
-                            <div
-                                style={{ display: activeTab === "Skills" ? "flex" : "none" }}
-                                className="h-full flex-col"
-                            >
-                                <SkillsPanel />
-                            </div>
-                            <div style={{ display: activeTab === "MCP" ? "flex" : "none" }} className="h-full flex-col">
-                                <McpPanel />
-                            </div>
+                            {visitedTabs.has("Modèles") && (
+                                <div
+                                    style={{ display: activeTab === "Modèles" ? "flex" : "none" }}
+                                    className="h-full flex-col"
+                                >
+                                    <ModelsPanel />
+                                </div>
+                            )}
+                            {visitedTabs.has("Skills") && (
+                                <div
+                                    style={{ display: activeTab === "Skills" ? "flex" : "none" }}
+                                    className="h-full flex-col"
+                                >
+                                    <SkillsPanel />
+                                </div>
+                            )}
+                            {visitedTabs.has("MCP") && (
+                                <div
+                                    style={{ display: activeTab === "MCP" ? "flex" : "none" }}
+                                    className="h-full flex-col"
+                                >
+                                    <McpPanel />
+                                </div>
+                            )}
                             {activeTab === "Paramètres" && (
                                 <div className="h-full overflow-y-auto p-8">
                                     <SettingsPanel />
