@@ -20,7 +20,7 @@ import { ImageFormatPicker } from "./chat/ImageFormatPicker";
 import { useConversationLoader } from "../hooks/useConversationLoader";
 import { useVoice } from "../hooks/useVoice";
 import { useBuildMachineContext } from "../hooks/useBuildMachineContext";
-import { useToolCalling } from "../hooks/useToolCalling";
+import { useToolCalling, type UseModelConfig, type UseToolCallingRefs, type UseSDConfig } from "../hooks/useToolCalling";
 import { useFileAttachments } from "../hooks/useFileAttachments";
 import { autoConfigureFromHardware, type HardwareInfo } from "../lib/hardwareConfig";
 import { inspectModelMetadata } from "../lib/modelMetadata";
@@ -239,24 +239,35 @@ export default function ChatWindow({
         toolRunning,
         setToolRunning,
         messages,
-        modelPath,
-        temperature,
-        contextWindow,
-        turboQuant,
-        sampling,
-        thinkingEnabled,
-        machineContext,
-        systemPrompt,
+        modelConfig: {
+            modelPath,
+            temperature,
+            contextWindow,
+            turboQuant,
+            sampling,
+            thinkingEnabled,
+            machineContext,
+            systemPrompt,
+        } satisfies UseModelConfig,
+        refs: {
+            chatModeRef,
+            prevStreamingRef,
+            lastToolSignatureRef,
+            lastToolWasErrorRef,
+            jsonParseErrorCountRef,
+            convTitleSetRef,
+            dispatchToolRef,
+            projectStructureRef,
+            planRef,
+        } satisfies UseToolCallingRefs,
+        sdConfig: {
+            selectedSDFormat,
+            selectedBatchCount,
+            selectedSDModel: sdModelPath,
+        } satisfies UseSDConfig,
         sendPrompt,
         updateLastAssistantContent,
         buildMachineContext,
-        chatModeRef,
-        prevStreamingRef,
-        lastToolSignatureRef,
-        lastToolWasErrorRef,
-        jsonParseErrorCountRef,
-        convTitleSetRef,
-        dispatchToolRef,
         setPendingQuestion,
         setPendingAgentPermission,
         setPendingPlanConfirm,
@@ -270,16 +281,11 @@ export default function ChatWindow({
         speakText,
         setTodoItems,
         setProjectStructure,
-        projectStructureRef,
         setPlanContent,
-        planRef,
         setImageGenerating: setIsImageGenerating,
         setLiveImagePreview,
         setLiveImageProgress,
         insertMessage,
-        selectedSDFormat,
-        selectedBatchCount,
-        selectedSDModel: sdModelPath,
     });
 
     const assistantMessages = useMemo<LlamaMessage[]>(() => {

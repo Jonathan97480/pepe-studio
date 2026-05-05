@@ -3,6 +3,16 @@ export { extractSimpleTool, extractWriteFileTool, normalizeToolTags, parseMessag
 
 export type ChatMode = "ask" | "plan" | "agent";
 
+/** Génère un titre de secours pour une conversation à partir des messages. */
+export function buildFallbackConversationTitle(messages: { role: string; content: string }[]): string {
+    const lastUser = [...messages].reverse().find((msg) => msg.role === "user" && msg.content.trim());
+    const source = (lastUser?.content ?? "Nouvelle conversation").replace(/📎.*$/g, "").replace(/\s+/g, " ").trim();
+    const words = source.split(" ").filter(Boolean).slice(0, 6);
+    const title = words.join(" ").trim();
+    return title || "Nouvelle conversation";
+}
+
+
 /** Appelle une commande Tauri avec un timeout. Lance une erreur si pas de réponse dans `ms` ms. */
 export function invokeWithTimeout<T>(cmd: string, args: Record<string, unknown>, ms: number): Promise<T> {
     return Promise.race([
