@@ -86,6 +86,42 @@ export const normalizeToolTags = (text: string): string => {
         (_, q) => `<tool>{"search_web": ${JSON.stringify(q)}}</tool>`,
     );
     t = t.replace(
+        /<generate_image\s+prompt="([^"]*)"(?:\s*\/?>\s*(?:<\/generate_image>)?)/gi,
+        (_, p) => `<tool>{"generate_image": ${JSON.stringify(p)}}</tool>`,
+    );
+    t = t.replace(
+        /<analyze_folder\s+path="([^"]*)"(?:\s*\/?>\s*(?:<\/analyze_folder>)?)/gi,
+        (_, p) => `<tool>{"analyze_folder": ${JSON.stringify(p)}}</tool>`,
+    );
+    t = t.replace(
+        /<read_image\s+path="([^"]*)"(?:\s*\/?>\s*(?:<\/read_image>)?)/gi,
+        (_, p) => `<tool>{"read_image": ${JSON.stringify(p)}}</tool>`,
+    );
+    t = t.replace(
+        /<read_pdf\s+path="([^"]*)"(?:\s*\/?>\s*(?:<\/read_pdf>)?)/gi,
+        (_, p) => `<tool>{"read_pdf": ${JSON.stringify(p)}}</tool>`,
+    );
+    t = t.replace(
+        /<read_pdf_brief\s+path="([^"]*)"(?:\s*\/?>\s*(?:<\/read_pdf_brief>)?)/gi,
+        (_, p) => `<tool>{"read_pdf_brief": ${JSON.stringify(p)}}</tool>`,
+    );
+    t = t.replace(
+        /<list_folder_files\s+path="([^"]*)"(?:\s*\/?>\s*(?:<\/list_folder_files>)?)/gi,
+        (_, p) => `<tool>{"list_folder_files": ${JSON.stringify(p)}}</tool>`,
+    );
+    t = t.replace(
+        /<list_folder_images\s+path="([^"]*)"(?:\s*\/?>\s*(?:<\/list_folder_images>)?)/gi,
+        (_, p) => `<tool>{"list_folder_images": ${JSON.stringify(p)}}</tool>`,
+    );
+    t = t.replace(
+        /<list_folder_pdfs\s+path="([^"]*)"(?:\s*\/?>\s*(?:<\/list_folder_pdfs>)?)/gi,
+        (_, p) => `<tool>{"list_folder_pdfs": ${JSON.stringify(p)}}</tool>`,
+    );
+    t = t.replace(
+        /<get_tool_doc\s+tool="([^"]*)"(?:\s*\/?>\s*(?:<\/get_tool_doc>)?)/gi,
+        (_, p) => `<tool>{"get_tool_doc": ${JSON.stringify(p)}}</tool>`,
+    );
+    t = t.replace(
         /<scrape_url\s+url="([^"]*)"(?:\s*\/?>\s*(?:<\/scrape_url>)?)/gi,
         (_, u) => `<tool>{"scrape_url": ${JSON.stringify(u)}}</tool>`,
     );
@@ -102,6 +138,8 @@ export const normalizeToolTags = (text: string): string => {
 
     t = t.replace(/<stop_dev_server[^>]*\/?>/gi, '<tool>{"stop_dev_server": true}</tool>');
     t = t.replace(/<get_dev_server_info[^>]*\/?>/gi, '<tool>{"get_dev_server_info": true}</tool>');
+    t = t.replace(/<get_hardware_info[^>]*\/?>/gi, '<tool>{"get_hardware_info": true}</tool>');
+    t = t.replace(/<list_sd_models[^>]*\/?>/gi, '<tool>{"list_sd_models": true}</tool>');
 
     return t;
 };
