@@ -13,16 +13,20 @@
 ///   chat_api.rs   — handler POST /v1/chat/completions (loop + stream)
 ///   tools_api.rs  — execute_tool, ensure_tools_are_available, helpers
 use axum::{
+    middleware,
     routing::{get, post},
-    Router,
+    Extension, Router,
 };
 use serde_json::{json, Value};
+use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::sync::oneshot;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::chat_api::chat_completions_handler;
 use crate::health::health_handler;
 use crate::models_api::models_handler;
+use crate::rate_limit::{rate_limit_middleware, RateLimiter};
 use crate::state::ProxyState;
 
 // Re-export pour que main.rs puisse importer ApiServerState depuis api_server
@@ -43,10 +47,22 @@ pub async fn start_api_server(
         }
     }
 
+    // CORS — restreint aux origines localhost/127.0.0.1 uniquement
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(AllowOrigin::predicate(
+            |origin: &axum::http::HeaderValue, _: &axum::http::request::Parts| {
+                let b = origin.as_bytes();
+                b.starts_with(b"http://localhost")
+                    || b.starts_with(b"http://127.0.0.1")
+                    || b.starts_with(b"https://localhost")
+                    || b.starts_with(b"https://127.0.0.1")
+            },
+        ))
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_headers(tower_http::cors::Any);
+
+    // Rate limiter : 120 requêtes par minute par IP
+    let rate_limiter = RateLimiter::new(120, Duration::from_secs(60));
 
     let proxy_state = ProxyState {
         llama_port: 8765,
@@ -58,9 +74,12 @@ pub async fn start_api_server(
         .route("/v1/models", get(models_handler))
         .route("/v1/chat/completions", post(chat_completions_handler))
         .with_state(proxy_state)
+        .layer(middleware::from_fn(rate_limit_middleware))
+        .layer(Extension(rate_limiter))
         .layer(cors);
 
-    let addr: std::net::SocketAddr = format!("0.0.0.0:{}", port)
+    // Écoute uniquement sur localhost — pas d'exposition réseau externe
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port)
         .parse()
         .map_err(|e: std::net::AddrParseError| e.to_string())?;
 
@@ -77,7 +96,7 @@ pub async fn start_api_server(
 
     tokio::spawn(async move {
         axum::Server::bind(&addr)
-            .serve(router.into_make_service())
+            .serve(router.into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(async {
                 rx.await.ok();
             })

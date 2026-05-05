@@ -20,6 +20,7 @@ mod mcp;
 mod media;
 mod model_metadata;
 mod models_api;
+mod rate_limit;
 mod scraper;
 mod search;
 mod shell_ops;

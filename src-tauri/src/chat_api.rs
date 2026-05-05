@@ -15,12 +15,81 @@ use serde_json::{json, Value};
 use crate::state::ProxyState;
 use crate::tools_api::{ensure_tools_are_available, execute_tool};
 
+// ── Validation du schéma de la requête chat ───────────────────────────────────
+
+/// Valide que le body de la requête respecte le schéma minimal OpenAI-compatible.
+/// Retourne `Ok(())` si valide, `Err(message)` sinon.
+fn validate_chat_request(body: &Value) -> Result<(), String> {
+    // messages : obligatoire, tableau non vide
+    let messages = body
+        .get("messages")
+        .ok_or("Champ 'messages' manquant")?
+        .as_array()
+        .ok_or("'messages' doit être un tableau JSON")?;
+
+    if messages.is_empty() {
+        return Err("'messages' ne peut pas être un tableau vide".into());
+    }
+
+    for (i, msg) in messages.iter().enumerate() {
+        // role : obligatoire, chaîne de caractères
+        msg.get("role")
+            .and_then(|r| r.as_str())
+            .ok_or_else(|| format!("messages[{i}]: champ 'role' manquant ou invalide"))?;
+
+        // content : obligatoire (string ou array — les deux sont acceptés par l'API)
+        if msg.get("content").is_none() {
+            return Err(format!("messages[{i}]: champ 'content' manquant"));
+        }
+    }
+
+    // max_tokens : si présent, doit être un entier positif
+    if let Some(mt) = body.get("max_tokens") {
+        if !mt.is_null() {
+            let n = mt
+                .as_i64()
+                .ok_or("'max_tokens' doit être un entier")?;
+            if n <= 0 {
+                return Err("'max_tokens' doit être strictement positif".into());
+            }
+        }
+    }
+
+    // temperature : si présent, doit être un nombre entre 0 et 2
+    if let Some(t) = body.get("temperature") {
+        if !t.is_null() {
+            let f = t
+                .as_f64()
+                .ok_or("'temperature' doit être un nombre")?;
+            if !(0.0..=2.0).contains(&f) {
+                return Err("'temperature' doit être compris entre 0 et 2".into());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ── Handler principal ─────────────────────────────────────────────────────────
 
 pub async fn chat_completions_handler(
     AxumState(state): AxumState<ProxyState>,
     Json(body): Json<Value>,
 ) -> Response {
+    // Validation du schéma JSON avant tout traitement
+    if let Err(msg) = validate_chat_request(&body) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": {
+                    "message": msg,
+                    "type": "invalid_request_error",
+                    "code": "unprocessable_entity"
+                }
+            })),
+        )
+            .into_response();
+    }
     let is_streaming = body
         .get("stream")
         .and_then(|v| v.as_bool())
