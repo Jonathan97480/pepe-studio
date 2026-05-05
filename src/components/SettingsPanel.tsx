@@ -37,6 +37,10 @@ export default function SettingsPanel() {
     const [searchTesting, setSearchTesting] = useState(false);
     const [searchTestResult, setSearchTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
+    const [turboQuantEnabled, setTurboQuantEnabled] = useState(() => {
+        return localStorage.getItem("llama_turboquant_enabled") === "true";
+    });
+
     // ── État serveur API ──────────────────────────────────────────────────────
     const [apiPort, setApiPort] = useState<number>(() => {
         const saved = localStorage.getItem("api_server_port");
@@ -109,6 +113,15 @@ export default function SettingsPanel() {
             });
         } finally {
             setSearchTesting(false);
+        }
+    };
+
+    const toggleTurboQuant = () => {
+        const newValue = !turboQuantEnabled;
+        setTurboQuantEnabled(newValue);
+        localStorage.setItem("llama_turboquant_enabled", String(newValue));
+        if (newValue) {
+            showError("TurboQuant activé — redémarrez llama.cpp pour appliquer les modifications");
         }
     };
 
@@ -379,6 +392,60 @@ export default function SettingsPanel() {
                         {searchTestResult.message}
                     </div>
                 )}
+            </div>
+
+            {/* ── Section llama.cpp (Standard vs TurboQuant) ── */}
+            <div className="flex flex-col gap-3 border-t border-white/10 pt-5 mt-2">
+                <div>
+                    <h3 className="font-semibold text-sm text-white">llama.cpp — Mode inférence</h3>
+                    <p className="text-xs text-slate-400 mt-1">
+                        Choisissez entre la version standard (stable) ou TurboQuant bêta (optimisé mémoire).
+                    </p>
+                </div>
+
+                <label className="flex items-start gap-3 rounded-xl bg-white/5 border border-white/10 px-4 py-3">
+                    <input
+                        type="checkbox"
+                        checked={turboQuantEnabled}
+                        onChange={toggleTurboQuant}
+                        className="mt-0.5 h-4 w-4 accent-cyan-500"
+                    />
+                    <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                            <p className="font-medium">Activer TurboQuant (bêta)</p>
+                            <span className="inline-block rounded-full bg-orange-500/20 border border-orange-500/30 px-2 py-0.5 text-[10px] font-semibold text-orange-300 uppercase tracking-wider">
+                                Bêta
+                            </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-2">
+                            Compression avancée du KV cache (2-bit) pour réduire la mémoire RAM utilisée. Peut améliorer
+                            les performances sur hardware limité.
+                        </p>
+                    </div>
+                </label>
+
+                {turboQuantEnabled && (
+                    <div className="rounded-xl bg-orange-500/10 border border-orange-500/20 px-4 py-3 flex flex-col gap-2">
+                        <div className="flex items-start gap-2">
+                            <span className="text-lg">⚠️</span>
+                            <div>
+                                <p className="text-sm font-semibold text-orange-300">Mode bêta activé</p>
+                                <ul className="text-xs text-orange-200 mt-2 space-y-1">
+                                    <li>• Cette fonctionnalité est encore en test</li>
+                                    <li>• La qualité des réponses peut varier</li>
+                                    <li>• Veuillez signaler les bugs ou anomalies</li>
+                                    <li>• Vous devez redémarrer llama.cpp pour appliquer les changements</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                <p className="text-xs text-slate-500 italic">
+                    <strong>Mode standard</strong> — Comportement habituel llama.cpp, stable et entièrement supporté. <br />
+                    <strong>TurboQuant</strong> — Basé sur llama-cpp-turboquant, optimisé pour l&apos;usage mémoire avec
+                    le KV cache quantifié.
+                </p>
             </div>
 
             {/* ── Section Serveur API OpenAI ── */}
