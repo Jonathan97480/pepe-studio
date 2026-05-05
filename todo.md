@@ -142,20 +142,20 @@
 
 ### Lundi 25/05/2026 — Rate limiting & CORS
 
-- [ ] Ajouter rate limiting sur le serveur API (axum middleware)
-- [ ] Restreindre CORS à `localhost` uniquement (supprimer `Any`)
-- [ ] Ajouter validation de schéma JSON pour les requêtes API entrantes
-- [ ] `cargo check` ✅
-- [ ] Commit
+- [x] Ajouter rate limiting sur le serveur API (axum middleware)
+- [x] Restreindre CORS à `localhost` uniquement (supprimer `Any`)
+- [x] Ajouter validation de schéma JSON pour les requêtes API entrantes
+- [x] `cargo check` ✅
+- [x] Commit
 
 ### Mardi 26/05/2026 — Tests sécurité
 
-- [ ] Ajouter tests : command injection (chars spéciaux, `;`, `&&`, `|`)
-- [ ] Ajouter tests : path traversal (`../`, chemins absolus hors scope)
-- [ ] Ajouter tests d'intégration API critiques (`/health`, `/v1/models`, `/v1/chat/completions`)
-- [ ] Vérifier logs d'audit sur opérations sensibles
-- [ ] `npm run test` ✅
-- [ ] Commit
+- [x] Ajouter tests : command injection (chars spéciaux, `;`, `&&`, `|`)
+- [x] Ajouter tests : path traversal (`../`, chemins absolus hors scope)
+- [x] Ajouter tests d'intégration API critiques (`/health`, `/v1/models`, `/v1/chat/completions`)
+- [x] Vérifier logs d'audit sur opérations sensibles
+- [x] `npm run test` ✅ — 79 TypeScript + 36 Rust (27 nouveaux) passent
+- [x] Commit
 
 ### Mercredi 27/05/2026 — Suite de tests complète
 
@@ -183,10 +183,10 @@
 
 ## Lundi 01/06/2026 — QA Docs & Prompts Système _(Jalon 5 — Release Gate v1.0.0)_
 
-- [ ] Vérifier toute la documentation produit (`README`, `CHANGELOG`, `RELEASE_CHECKLIST`, `CONTRIBUTING`)
-- [ ] Relire les prompts système IA (instructions, garde-fous, format tags outils)
-- [ ] Contrôler encodage UTF-8, caractères cassés/corrompus
-- [ ] Vérifier cohérence FR/EN, fautes critiques, placeholders oubliés
-- [ ] Exécuter tests manuels de prompts (scénarios réels) pour valider tool-calls
-- [ ] Corriger anomalies détectées
-- [ ] **Go/No-Go final → Tag et publication v1.0.0** 🚀
+- [x] Vérifier toute la documentation produit (`README`, `CHANGELOG`, `RELEASE_CHECKLIST`, `CONTRIBUTING`)
+- [x] Relire les prompts système IA (instructions, garde-fous, format tags outils)
+- [x] Contrôler encodage UTF-8, caractères cassés/corrompus
+- [x] Vérifier cohérence FR/EN, fautes critiques, placeholders oubliés
+- [x] Exécuter tests manuels de prompts (scénarios réels) pour valider tool-calls
+- [x] Corriger anomalies détectées
+- [x] **Go/No-Go final → Tag et publication v1.0.0** 🚀

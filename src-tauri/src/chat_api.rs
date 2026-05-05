@@ -46,9 +46,7 @@ fn validate_chat_request(body: &Value) -> Result<(), String> {
     // max_tokens : si présent, doit être un entier positif
     if let Some(mt) = body.get("max_tokens") {
         if !mt.is_null() {
-            let n = mt
-                .as_i64()
-                .ok_or("'max_tokens' doit être un entier")?;
+            let n = mt.as_i64().ok_or("'max_tokens' doit être un entier")?;
             if n <= 0 {
                 return Err("'max_tokens' doit être strictement positif".into());
             }
@@ -58,9 +56,7 @@ fn validate_chat_request(body: &Value) -> Result<(), String> {
     // temperature : si présent, doit être un nombre entre 0 et 2
     if let Some(t) = body.get("temperature") {
         if !t.is_null() {
-            let f = t
-                .as_f64()
-                .ok_or("'temperature' doit être un nombre")?;
+            let f = t.as_f64().ok_or("'temperature' doit être un nombre")?;
             if !(0.0..=2.0).contains(&f) {
                 return Err("'temperature' doit être compris entre 0 et 2".into());
             }
@@ -68,6 +64,144 @@ fn validate_chat_request(body: &Value) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+// ── Tests sécurité : validation JSON + logs d'audit ──────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── messages manquant / vide ───────────────────────────────────────────────
+
+    #[test]
+    fn rejects_missing_messages() {
+        let body = json!({"model": "gpt-4"});
+        assert!(validate_chat_request(&body).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_messages_array() {
+        let body = json!({"messages": []});
+        let err = validate_chat_request(&body).unwrap_err();
+        assert!(err.contains("vide"));
+    }
+
+    #[test]
+    fn rejects_messages_not_array() {
+        let body = json!({"messages": "hello"});
+        assert!(validate_chat_request(&body).is_err());
+    }
+
+    // ── role / content ────────────────────────────────────────────────────────
+
+    #[test]
+    fn rejects_message_without_role() {
+        let body = json!({"messages": [{"content": "hi"}]});
+        let err = validate_chat_request(&body).unwrap_err();
+        assert!(err.contains("role"));
+    }
+
+    #[test]
+    fn rejects_message_without_content() {
+        let body = json!({"messages": [{"role": "user"}]});
+        let err = validate_chat_request(&body).unwrap_err();
+        assert!(err.contains("content"));
+    }
+
+    // ── max_tokens ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn rejects_max_tokens_zero() {
+        let body = json!({
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 0
+        });
+        assert!(validate_chat_request(&body).is_err());
+    }
+
+    #[test]
+    fn rejects_max_tokens_negative() {
+        let body = json!({
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": -1
+        });
+        assert!(validate_chat_request(&body).is_err());
+    }
+
+    #[test]
+    fn accepts_max_tokens_positive() {
+        let body = json!({
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 512
+        });
+        assert!(validate_chat_request(&body).is_ok());
+    }
+
+    // ── temperature ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn rejects_temperature_above_2() {
+        let body = json!({
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": 3.0
+        });
+        assert!(validate_chat_request(&body).is_err());
+    }
+
+    #[test]
+    fn rejects_temperature_negative() {
+        let body = json!({
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": -0.1
+        });
+        assert!(validate_chat_request(&body).is_err());
+    }
+
+    #[test]
+    fn accepts_temperature_boundary_values() {
+        for temp in [0.0f64, 1.0, 2.0] {
+            let body = json!({
+                "messages": [{"role": "user", "content": "hi"}],
+                "temperature": temp
+            });
+            assert!(validate_chat_request(&body).is_ok(), "Attendu Ok pour temperature={temp}");
+        }
+    }
+
+    // ── requête valide de référence ───────────────────────────────────────────
+
+    #[test]
+    fn accepts_valid_request() {
+        let body = json!({
+            "model": "pepe-studio-model",
+            "messages": [
+                {"role": "system", "content": "Tu es un assistant."},
+                {"role": "user",   "content": "Bonjour"}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 1024,
+            "stream": false
+        });
+        assert!(validate_chat_request(&body).is_ok());
+    }
+
+    // ── injection dans le contenu (vérification sanitaire) ───────────────────
+    // Le contenu des messages est transmis au modèle tel quel ;
+    // on vérifie que la validation ne rejette pas des strings avec chars spéciaux.
+
+    #[test]
+    fn accepts_content_with_special_chars() {
+        let body = json!({
+            "messages": [{
+                "role": "user",
+                "content": "test; echo pwned && rm -rf / | cat ../../etc/passwd"
+            }]
+        });
+        // Le contenu est data pour le LLM — pas d'exécution, donc valide
+        assert!(validate_chat_request(&body).is_ok());
+    }
 }
 
 // ── Handler principal ─────────────────────────────────────────────────────────

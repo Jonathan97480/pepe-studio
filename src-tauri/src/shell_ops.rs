@@ -113,3 +113,74 @@ pub fn run_shell_command(command: String) -> Result<String, String> {
         Ok("(aucune sortie)".to_string())
     }
 }
+
+// ── Tests sécurité : command injection ────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// run_shell_command doit rejeter une commande vide.
+    #[test]
+    fn rejects_empty_command() {
+        assert!(run_shell_command("".into()).is_err());
+        assert!(run_shell_command("   ".into()).is_err());
+    }
+
+    /// run_shell_command doit rejeter une commande trop longue (> 2000 chars).
+    #[test]
+    fn rejects_oversized_command() {
+        let long = "A".repeat(2001);
+        let result = run_shell_command(long);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("2000"));
+    }
+
+    /// Les commandes SSH interactives doivent être bloquées.
+    #[test]
+    fn blocks_ssh_command() {
+        let result = run_shell_command("ssh user@host".into());
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("interactive") || msg.contains("terminal_start_interactive"),
+            "Message inattendu : {msg}"
+        );
+    }
+
+    /// Les commandes telnet interactives doivent être bloquées.
+    #[test]
+    fn blocks_telnet_command() {
+        let result = run_shell_command("telnet 192.168.1.1".into());
+        assert!(result.is_err());
+    }
+
+    /// Les commandes vim/nano/less interactives doivent être bloquées.
+    #[test]
+    fn blocks_interactive_editors() {
+        for cmd in &["vim /etc/hosts", "nano file.txt", "less /var/log/syslog"] {
+            let result = run_shell_command(cmd.to_string());
+            assert!(result.is_err(), "Attendu Err pour '{cmd}'");
+        }
+    }
+
+    /// Les caractères d'injection courants (;, &&, |) sont transmis tels quels
+    /// à PowerShell — le shell lui-même les gère. On vérifie que la fonction
+    /// ne plante pas et retourne un résultat (pas de panic).
+    ///
+    /// Note : sur un vrai système, PowerShell exécuterait les deux parties.
+    /// Le test vérifie que run_shell_command ne crash pas sur ces inputs.
+    #[test]
+    fn does_not_panic_on_injection_chars() {
+        // Ces appels peuvent Ok ou Err selon l'OS, mais ne doivent jamais paniquer.
+        let inputs = [
+            "echo a; echo b",
+            "echo a && echo b",
+            "echo a | cat",
+            "echo $(whoami)",
+        ];
+        for input in inputs {
+            let _ = run_shell_command(input.to_string()); // pas de panic attendu
+        }
+    }
+}

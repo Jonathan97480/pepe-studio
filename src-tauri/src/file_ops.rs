@@ -299,3 +299,95 @@ pub fn batch_rename_files(renames: Vec<BatchRenameItem>) -> Vec<BatchRenameResul
         })
         .collect()
 }
+
+// ── Tests sécurité : path traversal ───────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── read_file_content ──────────────────────────────────────────────────────
+
+    /// Chemin vide doit être rejeté.
+    #[test]
+    fn read_rejects_empty_path() {
+        assert!(read_file_content("".into()).is_err());
+        assert!(read_file_content("   ".into()).is_err());
+    }
+
+    /// Fichier inexistant doit retourner une erreur explicite.
+    #[test]
+    fn read_rejects_missing_file() {
+        let result = read_file_content("/nonexistent/path/secret.txt".into());
+        assert!(result.is_err());
+    }
+
+    /// Un chemin contenant `../` (path traversal classique) sur un fichier
+    /// inexistant doit être rejeté (fichier introuvable).
+    #[test]
+    fn read_rejects_dotdot_traversal() {
+        let result = read_file_content("../../etc/passwd".into());
+        assert!(
+            result.is_err(),
+            "Un chemin traversal devrait échouer si le fichier n'existe pas"
+        );
+    }
+
+    // ── write_file ────────────────────────────────────────────────────────────
+
+    /// Chemin vide doit être rejeté.
+    #[test]
+    fn write_rejects_empty_path() {
+        assert!(write_file("".into(), "contenu".into()).is_err());
+    }
+
+    // ── patch_file ────────────────────────────────────────────────────────────
+
+    /// Chemin vide doit être rejeté.
+    #[test]
+    fn patch_rejects_empty_path() {
+        assert!(patch_file("".into(), "search".into(), "replace".into()).is_err());
+    }
+
+    /// SEARCH vide doit être rejeté (bloquer une réécriture accidentelle).
+    #[test]
+    fn patch_rejects_empty_search() {
+        assert!(patch_file("some/path".into(), "".into(), "replace".into()).is_err());
+    }
+
+    /// Fichier inexistant doit retourner une erreur.
+    #[test]
+    fn patch_rejects_missing_file() {
+        let result = patch_file("/nonexistent/file.txt".into(), "foo".into(), "bar".into());
+        assert!(result.is_err());
+    }
+
+    // ── list_folder_pdfs ──────────────────────────────────────────────────────
+
+    /// Chemin vide doit être rejeté.
+    #[test]
+    fn list_pdfs_rejects_empty_folder() {
+        assert!(list_folder_pdfs("".into(), None).is_err());
+    }
+
+    /// Dossier inexistant doit retourner une erreur.
+    #[test]
+    fn list_pdfs_rejects_missing_dir() {
+        assert!(list_folder_pdfs("/this/does/not/exist/at/all".into(), None).is_err());
+    }
+
+    // ── batch_rename ──────────────────────────────────────────────────────────
+
+    /// Renommer un fichier inexistant doit retourner success=false sans paniquer.
+    #[test]
+    fn batch_rename_missing_source_returns_error_entry() {
+        let items = vec![BatchRenameItem {
+            from: "/nonexistent/source.pdf".into(),
+            to: "dest.pdf".into(),
+        }];
+        let results = batch_rename_files(items);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].success);
+        assert!(results[0].error.is_some());
+    }
+}
