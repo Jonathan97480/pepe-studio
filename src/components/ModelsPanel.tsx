@@ -175,7 +175,8 @@ export default function ModelsPanel() {
                     return detectChatTemplate(path, metadata);
                 })(),
             });
-            await invoke<string>("start_llama", { modelPath: path, params: args });
+            const useTurboquantBinary = localStorage.getItem("llama_turboquant_enabled") === "true";
+            await invoke<string>("start_llama", { modelPath: path, params: args, useTurboquantBinary });
             setIsModelLoaded(true);
             setLoadedModelPath(path);
             applyConfigToContext(config);

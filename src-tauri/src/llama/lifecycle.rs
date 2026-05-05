@@ -160,7 +160,7 @@ fn resolve_model_path(app: &AppHandle, model_path: &str) -> Result<PathBuf, Stri
     Err(format!("Le modèle '{}' est introuvable", model_path))
 }
 
-fn resolve_llama_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
+fn standard_llama_server_candidates(app: &AppHandle) -> Vec<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     let mut base_dirs: Vec<PathBuf> = Vec::new();
@@ -198,19 +198,111 @@ fn resolve_llama_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
     candidates.push(cwd.join("../llama.cpp/llama-server.exe"));
     candidates.push(cwd.join("../llama.cpp/llama-server"));
 
-    for candidate in &candidates {
-        println!(
-            "[llama_sidecar] checking server binary: {}",
-            candidate.display()
-        );
-        if candidate.exists() {
-            return Ok(candidate.canonicalize().unwrap_or_else(|_| candidate.clone()));
+    candidates
+}
+
+fn turboquant_llama_server_candidates(app: &AppHandle) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    let mut base_dirs: Vec<PathBuf> = Vec::new();
+    if let Some(rd) = app.path_resolver().resource_dir() {
+        base_dirs.extend(dir_candidates(rd));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(ed) = exe.parent() {
+            base_dirs.extend(dir_candidates(ed.to_path_buf()));
         }
     }
 
+    for base in &base_dirs {
+        candidates.push(
+            base.join("llama.cpp")
+                .join("turboquant")
+                .join("tqp-v0.1.1")
+                .join("llama-server.exe"),
+        );
+        candidates.push(
+            base.join("llama.cpp")
+                .join("turboquant")
+                .join("tqp-v0.1.1")
+                .join("llama-server"),
+        );
+        candidates.push(
+            base.join("_up_")
+                .join("llama.cpp")
+                .join("turboquant")
+                .join("tqp-v0.1.1")
+                .join("llama-server.exe"),
+        );
+        candidates.push(
+            base.join("_up_")
+                .join("llama.cpp")
+                .join("turboquant")
+                .join("tqp-v0.1.1")
+                .join("llama-server"),
+        );
+    }
+
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    candidates.push(
+        cwd.join("llama.cpp")
+            .join("turboquant")
+            .join("tqp-v0.1.1")
+            .join("llama-server.exe"),
+    );
+    candidates.push(
+        cwd.join("llama.cpp")
+            .join("turboquant")
+            .join("tqp-v0.1.1")
+            .join("llama-server"),
+    );
+    candidates.push(Path::new("llama.cpp/turboquant/tqp-v0.1.1/llama-server.exe").to_path_buf());
+    candidates.push(Path::new("llama.cpp/turboquant/tqp-v0.1.1/llama-server").to_path_buf());
+
+    candidates
+}
+
+fn resolve_first_existing(candidates: &[PathBuf], label: &str) -> Option<PathBuf> {
+    for candidate in candidates {
+        println!(
+            "[llama_sidecar] checking {} binary: {}",
+            label,
+            candidate.display()
+        );
+        if candidate.exists() {
+            return Some(candidate.canonicalize().unwrap_or_else(|_| candidate.clone()));
+        }
+    }
+    None
+}
+
+fn resolve_llama_server_binary(app: &AppHandle, prefer_turboquant: bool) -> Result<PathBuf, String> {
+    if prefer_turboquant {
+        let turbo_candidates = turboquant_llama_server_candidates(app);
+        if let Some(found) = resolve_first_existing(&turbo_candidates, "turboquant") {
+            return Ok(found);
+        }
+        println!(
+            "[llama_sidecar] turboquant demandé mais binaire introuvable, fallback vers standard"
+        );
+    }
+
+    let standard_candidates = standard_llama_server_candidates(app);
+    if let Some(found) = resolve_first_existing(&standard_candidates, "standard") {
+        return Ok(found);
+    }
+
+    let all_candidates: Vec<PathBuf> = if prefer_turboquant {
+        let mut all = turboquant_llama_server_candidates(app);
+        all.extend(standard_llama_server_candidates(app));
+        all
+    } else {
+        standard_candidates
+    };
+
     Err(format!(
         "Le binaire llama-server est introuvable. Recherché dans: {}",
-        candidates
+        all_candidates
             .iter()
             .map(|c| c.display().to_string())
             .collect::<Vec<_>>()
@@ -269,6 +361,7 @@ fn build_startup_error(app: &AppHandle, headline: &str) -> String {
 pub async fn start_llama(
     model_path: String,
     params: Vec<String>,
+    use_turboquant_binary: Option<bool>,
     state: State<'_, LlamaState>,
     app: AppHandle,
 ) -> Result<String, String> {
@@ -330,7 +423,8 @@ pub async fn start_llama(
 
     let resolved = resolve_model_path(&app, &model_path)?;
     let resolved_str = resolved.to_string_lossy().to_string();
-    let server_binary = resolve_llama_server_binary(&app)?;
+    let prefer_turboquant = use_turboquant_binary.unwrap_or(false);
+    let server_binary = resolve_llama_server_binary(&app, prefer_turboquant)?;
     let server_dir = server_binary
         .parent()
         .unwrap_or(std::path::Path::new("."))

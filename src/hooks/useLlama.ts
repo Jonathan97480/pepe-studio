@@ -527,7 +527,13 @@ export function useLlama() {
         devLog("[useLlama] loadModel", config);
         try {
             const args = buildLlamaArgs(config);
-            const result = await safeInvoke<string>("start_llama", { modelPath: config.modelPath, params: args });
+            const useTurboquantBinary =
+                typeof window !== "undefined" && localStorage.getItem("llama_turboquant_enabled") === "true";
+            const result = await safeInvoke<string>("start_llama", {
+                modelPath: config.modelPath,
+                params: args,
+                useTurboquantBinary,
+            });
             devLog("[useLlama] loadModel result", result);
         } catch (e: unknown) {
             devError("[useLlama] loadModel error", e);
