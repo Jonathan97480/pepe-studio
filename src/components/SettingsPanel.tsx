@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useModelSettings, type TurboQuantType } from "../context/ModelSettingsContext";
 import { CONTEXT7_STORAGE_KEY } from "../tools/Context7Client";
-import { BRAVE_SEARCH_KEY, SERPER_SEARCH_KEY, TAVILY_SEARCH_KEY, SEARXNG_URL_KEY } from "../tools/SearchWeb";
+import { BRAVE_SEARCH_KEY, SERPER_SEARCH_KEY, TAVILY_SEARCH_KEY, SEARXNG_URL_KEY, searchWeb } from "../tools/SearchWeb";
 import { useErrorToast } from "../hooks/useErrorToast";
 import { ErrorToast } from "./chat/ErrorToast";
 
@@ -34,6 +34,8 @@ export default function SettingsPanel() {
     const [tavilyKey, setTavilyKey] = useState(() => localStorage.getItem(TAVILY_SEARCH_KEY) ?? "");
     const [searxngUrl, setSearxngUrl] = useState(() => localStorage.getItem(SEARXNG_URL_KEY) ?? "");
     const [searchSaved, setSearchSaved] = useState(false);
+    const [searchTesting, setSearchTesting] = useState(false);
+    const [searchTestResult, setSearchTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
     // ── État serveur API ──────────────────────────────────────────────────────
     const [apiPort, setApiPort] = useState<number>(() => {
@@ -77,6 +79,37 @@ export default function SettingsPanel() {
         localStorage.setItem(SEARXNG_URL_KEY, searxngUrl.trim());
         setSearchSaved(true);
         setTimeout(() => setSearchSaved(false), 2000);
+    };
+
+    const testWebSearch = async () => {
+        setSearchTesting(true);
+        setSearchTestResult(null);
+        try {
+            const results = await searchWeb({
+                query: "test",
+                source: "duckduckgo",
+                apiKey: undefined,
+                searxngUrl: undefined,
+            });
+            if (results.length > 0) {
+                setSearchTestResult({
+                    success: true,
+                    message: `✓ Succès ! ${results.length} résultats trouvés.`,
+                });
+            } else {
+                setSearchTestResult({
+                    success: false,
+                    message: "Aucun résultat trouvé.",
+                });
+            }
+        } catch (error) {
+            setSearchTestResult({
+                success: false,
+                message: `Erreur : ${(error as Error)?.message ?? String(error)}`,
+            });
+        } finally {
+            setSearchTesting(false);
+        }
     };
 
     const saveContext7Key = () => {
@@ -228,8 +261,8 @@ export default function SettingsPanel() {
                 <div>
                     <h3 className="font-semibold text-sm text-white">Recherche Web</h3>
                     <p className="text-xs text-slate-400 mt-1">
-                        DuckDuckGo est gratuit et ne nécessite pas de clé. SearXNG est gratuit et open-source.
-                        Les autres moteurs offrent de meilleurs résultats avec une clé API.
+                        DuckDuckGo est gratuit et ne nécessite pas de clé. SearXNG est gratuit et open-source. Les
+                        autres moteurs offrent de meilleurs résultats avec une clé API.
                     </p>
                 </div>
                 <label className="flex flex-col gap-1">
@@ -308,16 +341,44 @@ export default function SettingsPanel() {
                         <span className="text-slate-400">https://searx.be</span>
                     </p>
                 </label>
-                <button
-                    onClick={saveSearchKeys}
-                    className={`self-start rounded-2xl border px-4 py-2 text-sm transition ${
-                        searchSaved
-                            ? "border-emerald-400/40 bg-emerald-500/20 text-emerald-300"
-                            : "border-white/10 bg-white/5 text-slate-300 hover:border-blue-400/40 hover:text-blue-300"
-                    }`}
-                >
-                    {searchSaved ? "✓ Sauvegardé" : "Sauvegarder les clés"}
-                </button>
+                <div className="flex gap-2">
+                    <button
+                        onClick={saveSearchKeys}
+                        className={`flex-1 rounded-2xl border px-4 py-2 text-sm transition ${
+                            searchSaved
+                                ? "border-emerald-400/40 bg-emerald-500/20 text-emerald-300"
+                                : "border-white/10 bg-white/5 text-slate-300 hover:border-blue-400/40 hover:text-blue-300"
+                        }`}
+                    >
+                        {searchSaved ? "✓ Sauvegardé" : "Sauvegarder les clés"}
+                    </button>
+                    <button
+                        onClick={testWebSearch}
+                        disabled={searchTesting}
+                        className={`flex-1 rounded-2xl border px-4 py-2 text-sm transition ${
+                            searchTesting
+                                ? "border-slate-400/20 bg-slate-500/10 text-slate-400 cursor-wait"
+                                : searchTestResult?.success
+                                  ? "border-cyan-400/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20"
+                                  : searchTestResult?.success === false
+                                    ? "border-orange-400/40 bg-orange-500/10 text-orange-300 hover:bg-orange-500/20"
+                                    : "border-white/10 bg-white/5 text-slate-300 hover:border-blue-400/40 hover:text-blue-300"
+                        }`}
+                    >
+                        {searchTesting ? "Test en cours…" : "🧪 Tester"}
+                    </button>
+                </div>
+                {searchTestResult && (
+                    <div
+                        className={`rounded-xl px-4 py-3 text-xs ${
+                            searchTestResult.success
+                                ? "bg-cyan-500/10 border border-cyan-500/20 text-cyan-300"
+                                : "bg-orange-500/10 border border-orange-500/20 text-orange-300"
+                        }`}
+                    >
+                        {searchTestResult.message}
+                    </div>
+                )}
             </div>
 
             {/* ── Section Serveur API OpenAI ── */}
