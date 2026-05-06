@@ -30,6 +30,15 @@ pub struct ModelConfig {
     /// Budget de reasoning llama.cpp : -1 = illimité, 0 = stop immédiat, N > 0 = budget
     #[serde(default)]
     pub reasoning_budget: i64,
+    /// Désactive le memory-mapping du fichier modèle (--no-mmap)
+    #[serde(default)]
+    pub no_mmap: bool,
+    /// Verrouille le modèle en RAM pour éviter le swap (--mlock)
+    #[serde(default)]
+    pub mlock: bool,
+    /// Nombre de couches MoE forcées sur CPU : 0 = auto (--n-cpu-moe)
+    #[serde(default)]
+    pub n_cpu_moe: i64,
 }
 
 fn strip_path_unc(path: std::path::PathBuf) -> std::path::PathBuf {
@@ -196,7 +205,7 @@ pub fn get_all_model_configs(state: State<'_, DbState>) -> Result<Vec<ModelConfi
     let conn = state.0.lock().unwrap();
     let mut stmt = conn
         .prepare(
-            "SELECT path, name, temperature, context_window, eval_batch_size, flash_attention, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template, reasoning_budget
+            "SELECT path, name, temperature, context_window, eval_batch_size, flash_attention, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template, reasoning_budget, no_mmap, mlock, n_cpu_moe
              FROM model_configs ORDER BY is_default DESC, name ASC",
         )
         .map_err(|e| e.to_string())?;
@@ -218,6 +227,9 @@ pub fn get_all_model_configs(state: State<'_, DbState>) -> Result<Vec<ModelConfi
                 sampling_json: row.get::<_, String>(12).unwrap_or_default(),
                 chat_template: row.get::<_, String>(13).unwrap_or_default(),
                 reasoning_budget: row.get::<_, i64>(14).unwrap_or(64),
+                no_mmap: row.get::<_, i64>(15).unwrap_or(0) != 0,
+                mlock: row.get::<_, i64>(16).unwrap_or(0) != 0,
+                n_cpu_moe: row.get::<_, i64>(17).unwrap_or(0),
             })
         })
         .map_err(|e| e.to_string())?
@@ -232,8 +244,8 @@ pub fn save_model_config(config: ModelConfig, state: State<'_, DbState>) -> Resu
     let conn = state.0.lock().unwrap();
     conn.execute(
         "INSERT OR REPLACE INTO model_configs
-         (path, name, temperature, context_window, eval_batch_size, flash_attention, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template, reasoning_budget)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+         (path, name, temperature, context_window, eval_batch_size, flash_attention, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template, reasoning_budget, no_mmap, mlock, n_cpu_moe)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             config.path,
             config.name,
@@ -249,7 +261,10 @@ pub fn save_model_config(config: ModelConfig, state: State<'_, DbState>) -> Resu
             config.is_default as i64,
             config.sampling_json,
             config.chat_template,
-            config.reasoning_budget
+            config.reasoning_budget,
+            config.no_mmap as i64,
+            config.mlock as i64,
+            config.n_cpu_moe
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -275,7 +290,7 @@ pub fn set_default_model(path: String, state: State<'_, DbState>) -> Result<(), 
 pub fn get_default_model(state: State<'_, DbState>) -> Result<Option<ModelConfig>, String> {
     let conn = state.0.lock().unwrap();
     match conn.query_row(
-        "SELECT path, name, temperature, context_window, eval_batch_size, flash_attention, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template, reasoning_budget
+        "SELECT path, name, temperature, context_window, eval_batch_size, flash_attention, system_prompt, turbo_quant, mmproj_path, n_gpu_layers, threads, is_default, sampling_json, chat_template, reasoning_budget, no_mmap, mlock, n_cpu_moe
          FROM model_configs WHERE is_default = 1 LIMIT 1",
         [],
         |row| {
@@ -295,6 +310,9 @@ pub fn get_default_model(state: State<'_, DbState>) -> Result<Option<ModelConfig
                 sampling_json: row.get::<_, String>(12).unwrap_or_default(),
                 chat_template: row.get::<_, String>(13).unwrap_or_default(),
                 reasoning_budget: row.get::<_, i64>(14).unwrap_or(64),
+                no_mmap: row.get::<_, i64>(15).unwrap_or(0) != 0,
+                mlock: row.get::<_, i64>(16).unwrap_or(0) != 0,
+                n_cpu_moe: row.get::<_, i64>(17).unwrap_or(0),
             })
         },
     ) {

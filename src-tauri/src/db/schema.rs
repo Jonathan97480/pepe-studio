@@ -60,6 +60,15 @@ pub fn init_db(app: &AppHandle) -> Connection {
         "ALTER TABLE model_configs ADD COLUMN reasoning_budget INTEGER NOT NULL DEFAULT 64;",
     )
     .ok();
+    // Migration : no_mmap, mlock, n_cpu_moe
+    conn.execute_batch("ALTER TABLE model_configs ADD COLUMN no_mmap INTEGER NOT NULL DEFAULT 0;")
+        .ok();
+    conn.execute_batch("ALTER TABLE model_configs ADD COLUMN mlock INTEGER NOT NULL DEFAULT 0;")
+        .ok();
+    conn.execute_batch(
+        "ALTER TABLE model_configs ADD COLUMN n_cpu_moe INTEGER NOT NULL DEFAULT 0;",
+    )
+    .ok();
 
     // Tables RAG : documents + FTS5 pour la recherche sémantique
     conn.execute_batch(

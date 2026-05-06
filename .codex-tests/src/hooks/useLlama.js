@@ -6,12 +6,17 @@ const streamUtils_1 = require("../lib/streamUtils");
 const tauri_1 = require("@tauri-apps/api/tauri");
 const event_1 = require("@tauri-apps/api/event");
 const llamaWrapper_1 = require("../lib/llamaWrapper");
+// Logger conditionnel — silencieux en production
+const isDev = process.env.NODE_ENV === "development";
+const devLog = isDev ? (...args) => console.log(...args) : () => { };
+const devError = isDev ? (...args) => console.error(...args) : () => { };
+const devWarn = isDev ? (...args) => console.warn(...args) : () => { };
 const safeInvoke = async (cmd, args) => {
     if (typeof window === "undefined") {
         throw new Error("Tauri invoke unavailable. Assure-toi de lancer l'application depuis le runtime Tauri, pas depuis le navigateur web.");
     }
     const tauri = window.__TAURI__;
-    console.log("[useLlama] safeInvoke", {
+    devLog("[useLlama] safeInvoke", {
         cmd,
         args,
         hasWindow: true,
@@ -27,7 +32,7 @@ const safeInvoke = async (cmd, args) => {
             return await (0, tauri_1.invoke)(cmd, args);
         }
         catch (error) {
-            console.error("[useLlama] apiInvoke failed", error);
+            devError("[useLlama] apiInvoke failed", error);
             throw error;
         }
     }
@@ -37,7 +42,7 @@ const safeInvoke = async (cmd, args) => {
             return await tauriInvoke(cmd, args);
         }
         catch (error) {
-            console.error("[useLlama] tauriInvoke failed", error);
+            devError("[useLlama] tauriInvoke failed", error);
             throw error;
         }
     }
@@ -72,7 +77,7 @@ function useLlama() {
     }, [messages]);
     const debugLog = (0, react_1.useCallback)((message) => {
         setDebugLogs((current) => [...current.slice(-24), message]);
-        console.log("[useLlama-debug]", message);
+        devLog("[useLlama-debug]", message);
     }, []);
     // normalizeVisibleAssistantText, isCorruptedThinkingChunk, detectRepetitionLoop
     // sont des fonctions pures importees depuis src/lib/streamUtils.ts
@@ -96,7 +101,7 @@ function useLlama() {
                     const lastPromptId = lastPromptIdRef.current;
                     const activeStreaming = streamingRef.current;
                     debugLog(`llama-stream event prompt_id=${payload.prompt_id} chunk=${payload.chunk} is_thinking=${payload.is_thinking} activePromptId=${activePromptId} lastPromptId=${lastPromptId} activeStreaming=${activeStreaming}`);
-                    console.log("[useLlama] llama-stream event", payload, {
+                    devLog("[useLlama] llama-stream event", payload, {
                         activePromptId,
                         lastPromptId,
                         activeStreaming,
@@ -104,7 +109,7 @@ function useLlama() {
                     const validPrompt = payload.prompt_id === activePromptId || payload.prompt_id === lastPromptId;
                     if (!validPrompt && !activeStreaming) {
                         debugLog(`llama-stream ignored due to prompt id mismatch payload=${payload.prompt_id} current=${activePromptId} last=${lastPromptId}`);
-                        console.log("[useLlama] llama-stream ignored due to prompt id mismatch", {
+                        devLog("[useLlama] llama-stream ignored due to prompt id mismatch", {
                             payloadPromptId: payload.prompt_id,
                             currentPromptId: activePromptId,
                             lastPromptId: lastPromptId,
@@ -126,7 +131,7 @@ function useLlama() {
                     if (!repetitionAbortedRef.current &&
                         !/<tool>|<patch_file|<write_file/i.test(payload.chunk) &&
                         (0, streamUtils_1.detectRepetitionLoop)(assistantVisibleBufferRef.current)) {
-                        console.warn("[useLlama] Boucle de répétition détectée — arrêt du stream");
+                        devWarn("[useLlama] Boucle de répétition détectée — arrêt du stream");
                         debugLog("⚠ Boucle de répétition détectée — arrêt du stream");
                         repetitionAbortedRef.current = true;
                         // Tronquer le contenu répétitif du dernier message
@@ -302,7 +307,7 @@ function useLlama() {
                             thinkingFromTag: !!thinkOpenMatch,
                         };
                         const newMessages = [...current, newMessage];
-                        console.log("[useLlama] appended new assistant chunk", newMessages);
+                        devLog("[useLlama] appended new assistant chunk", newMessages);
                         return newMessages;
                     });
                 });
@@ -313,7 +318,7 @@ function useLlama() {
                     const lastPromptId = lastPromptIdRef.current;
                     const activeStreaming = streamingRef.current;
                     debugLog(`llama-done event prompt_id=${payload.prompt_id} done=${payload.done} meta=${payload.meta} activePromptId=${activePromptId} lastPromptId=${lastPromptId} activeStreaming=${activeStreaming}`);
-                    console.log("[useLlama] llama-done event", payload, {
+                    devLog("[useLlama] llama-done event", payload, {
                         activePromptId,
                         lastPromptId,
                         activeStreaming,
@@ -321,7 +326,7 @@ function useLlama() {
                     const validPrompt = payload.prompt_id === activePromptId || payload.prompt_id === lastPromptId;
                     if (!validPrompt && !activeStreaming) {
                         debugLog(`llama-done ignored due to prompt id mismatch payload=${payload.prompt_id} current=${activePromptId} last=${lastPromptId}`);
-                        console.log("[useLlama] llama-done ignored due to prompt id mismatch", {
+                        devLog("[useLlama] llama-done ignored due to prompt id mismatch", {
                             payloadPromptId: payload.prompt_id,
                             currentPromptId: activePromptId,
                             lastPromptId: lastPromptId,
@@ -354,14 +359,14 @@ function useLlama() {
                     debugLog(`llama-done cleared active prompt, lastPromptId remains=${lastPromptIdRef.current}`);
                     setLoading(false);
                 });
-                console.log("[useLlama] llama-done listener registered");
+                devLog("[useLlama] llama-done listener registered");
                 unlistenError = await (0, event_1.listen)("llama-error", (event) => {
                     const payload = event.payload;
                     const activePromptId = activePromptIdRef.current;
                     const lastPromptId = lastPromptIdRef.current;
                     const activeStreaming = streamingRef.current;
                     debugLog(`llama-error event prompt_id=${payload.prompt_id} error=${payload.error} activePromptId=${activePromptId} lastPromptId=${lastPromptId} activeStreaming=${activeStreaming}`);
-                    console.log("[useLlama] llama-error event", payload, {
+                    devLog("[useLlama] llama-error event", payload, {
                         activePromptId,
                         lastPromptId,
                         activeStreaming,
@@ -369,7 +374,7 @@ function useLlama() {
                     const validPrompt = payload.prompt_id === activePromptId || payload.prompt_id === lastPromptId;
                     if (!validPrompt && !activeStreaming) {
                         debugLog(`llama-error ignored due to prompt id mismatch payload=${payload.prompt_id} current=${activePromptId} last=${lastPromptId}`);
-                        console.log("[useLlama] llama-error ignored due to prompt id mismatch", {
+                        devLog("[useLlama] llama-error ignored due to prompt id mismatch", {
                             payloadPromptId: payload.prompt_id,
                             currentPromptId: activePromptId,
                             lastPromptId: lastPromptId,
@@ -385,7 +390,7 @@ function useLlama() {
                     debugLog(`llama-error cleared active prompt, lastPromptId remains=${lastPromptIdRef.current}`);
                     setLoading(false);
                 });
-                console.log("[useLlama] llama-error listener registered");
+                devLog("[useLlama] llama-error listener registered");
                 unlistenUsage = await (0, event_1.listen)("llama-usage", (event) => {
                     const payload = event.payload;
                     if (payload.prompt_tokens != null && payload.prompt_tokens > 0) {
@@ -411,7 +416,7 @@ function useLlama() {
                 };
             }
             catch (err) {
-                console.error("[useLlama] initListeners failed", err);
+                devError("[useLlama] initListeners failed", err);
                 debugLog(`initListeners failed: ${err}`);
             }
         };
@@ -432,14 +437,14 @@ function useLlama() {
     const loadModel = (0, react_1.useCallback)(async (config) => {
         setError(null);
         setLoading(true);
-        console.log("[useLlama] loadModel", config);
+        devLog("[useLlama] loadModel", config);
         try {
             const args = (0, llamaWrapper_1.buildLlamaArgs)(config);
             const result = await safeInvoke("start_llama", { modelPath: config.modelPath, params: args });
-            console.log("[useLlama] loadModel result", result);
+            devLog("[useLlama] loadModel result", result);
         }
         catch (e) {
-            console.error("[useLlama] loadModel error", e);
+            devError("[useLlama] loadModel error", e);
             setError(getErrorMessage(e, "Erreur lors du chargement du modèle"));
         }
         finally {
@@ -469,7 +474,7 @@ function useLlama() {
         repetitionAbortedRef.current = false;
         assistantVisibleBufferRef.current = "";
         const promptId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        console.log("[useLlama] sendPrompt", { promptId, prompt, params });
+        devLog("[useLlama] sendPrompt", { promptId, prompt, params });
         currentPromptIdRef.current = promptId;
         activePromptIdRef.current = promptId;
         lastPromptIdRef.current = promptId;
@@ -487,7 +492,7 @@ function useLlama() {
                     { role: "user", content: displayPrompt },
                     { role: "assistant", content: "" },
                 ];
-                console.log("[useLlama] messages after sendPrompt", next);
+                devLog("[useLlama] messages after sendPrompt", next);
                 return next;
             });
         }
@@ -618,11 +623,11 @@ function useLlama() {
                 sampling,
                 thinkingEnabled: params?.thinkingEnabled ?? true,
             });
-            console.log("[useLlama] sendPrompt response", response);
+            devLog("[useLlama] sendPrompt response", response);
             return response;
         }
         catch (e) {
-            console.error("[useLlama] sendPrompt error", e);
+            devError("[useLlama] sendPrompt error", e);
             setError(getErrorMessage(e, "Erreur lors de l'envoi du prompt"));
             setStreaming(false);
             setCurrentPromptId(null);

@@ -1,6 +1,6 @@
 import type { ModelMetadata } from "./modelMetadata";
 
-export type TurboQuantType = "none" | "q8_0" | "q4_0" | "q4_1" | "q5_0" | "q5_1";
+export type TurboQuantType = "none" | "q8_0" | "q4_0" | "q4_1" | "q5_0" | "q5_1" | "turbo3" | "turbo4";
 
 export type SamplingParams = {
     topP?: number;
@@ -41,6 +41,9 @@ export type LlamaLaunchConfig = {
     chatTemplate?: string; // --chat-template : forcer le template si absent/cassé dans le GGUF
     useJinja?: boolean; // --jinja : utiliser le template Jinja2 embarqué dans le GGUF (Gemma 4 uncensored)
     reasoningBudget?: number; // --reasoning-budget : -1 = illimité, 0 = stop immédiat, N > 0 = budget
+    noMmap?: boolean; // --no-mmap : désactive le memory-mapping du modèle
+    mlock?: boolean; // --mlock : verrouille le modèle en RAM (évite le swap)
+    nCpuMoe?: number; // --n-cpu-moe : couches MoE forcées sur CPU (0 = auto)
     sampling?: SamplingParams;
     thinkingEnabled?: boolean;
 };
@@ -137,6 +140,18 @@ export function buildLlamaArgs(config: Partial<LlamaLaunchConfig>): string[] {
 
     if (config.reasoningBudget !== undefined && Number.isFinite(config.reasoningBudget)) {
         args.push("--reasoning-budget", Math.trunc(config.reasoningBudget).toString());
+    }
+
+    if (config.noMmap === true) {
+        args.push("--no-mmap");
+    }
+
+    if (config.mlock === true) {
+        args.push("--mlock");
+    }
+
+    if (config.nCpuMoe !== undefined && config.nCpuMoe > 0) {
+        args.push("--n-cpu-moe", config.nCpuMoe.toString());
     }
 
     if (config.useJinja) {

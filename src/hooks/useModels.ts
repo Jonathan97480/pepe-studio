@@ -23,6 +23,12 @@ export type ModelConfig = {
     chat_template: string;
     /** Budget de reasoning llama.cpp : -1 = illimité, 0 = stop immédiat, N > 0 = budget */
     reasoning_budget: number;
+    /** Désactive le memory-mapping du fichier modèle */
+    no_mmap: boolean;
+    /** Verrouille le modèle en RAM pour éviter le swap */
+    mlock: boolean;
+    /** Nombre de couches MoE forcées sur CPU (0 = auto) */
+    n_cpu_moe: number;
 };
 
 export const DEFAULT_SAMPLING: SamplingSettings = {
@@ -72,6 +78,9 @@ const DEFAULT_CONFIG: Omit<ModelConfig, "path" | "name" | "is_default"> = {
     sampling_json: "",
     chat_template: "",
     reasoning_budget: 64,
+    no_mmap: false,
+    mlock: false,
+    n_cpu_moe: 0,
 };
 
 export function useModels() {

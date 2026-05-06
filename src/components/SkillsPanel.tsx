@@ -3,7 +3,10 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useSkills } from "../context/SkillsContext";
-import { BUILTIN_TOOLS, loadBuiltinDisabled, saveBuiltinDisabled } from "../lib/builtinTools";
+import { loadBuiltinDisabled, saveBuiltinDisabled } from "../lib/builtinTools";
+import BuiltinToolsSection from "./skills/BuiltinToolsSection";
+import EmptySkillsState from "./skills/EmptySkillsState";
+import SkillsPanelHeader from "./skills/SkillsPanelHeader";
 
 type SkillMeta = {
     name: string;
@@ -13,11 +16,11 @@ type SkillMeta = {
 };
 
 const SKILL_TYPE_BADGE: Record<string, { label: string; icon: string; color: string }> = {
-    ps1:       { label: "PowerShell", icon: "🖥",  color: "border-blue-400/30 bg-blue-500/10 text-blue-300" },
-    http:      { label: "HTTP",       icon: "🌐", color: "border-violet-400/30 bg-violet-500/10 text-violet-300" },
-    python:    { label: "Python",     icon: "🐍", color: "border-yellow-400/30 bg-yellow-500/10 text-yellow-300" },
-    nodejs:    { label: "Node.js",    icon: "⬡",  color: "border-green-400/30 bg-green-500/10 text-green-300" },
-    composite: { label: "Composite",  icon: "⛓",  color: "border-orange-400/30 bg-orange-500/10 text-orange-300" },
+    ps1: { label: "PowerShell", icon: "🖥", color: "border-blue-400/30 bg-blue-500/10 text-blue-300" },
+    http: { label: "HTTP", icon: "🌐", color: "border-violet-400/30 bg-violet-500/10 text-violet-300" },
+    python: { label: "Python", icon: "🐍", color: "border-yellow-400/30 bg-yellow-500/10 text-yellow-300" },
+    nodejs: { label: "Node.js", icon: "⬡", color: "border-green-400/30 bg-green-500/10 text-green-300" },
+    composite: { label: "Composite", icon: "⛓", color: "border-orange-400/30 bg-orange-500/10 text-orange-300" },
 };
 
 export default function SkillsPanel() {
@@ -68,7 +71,9 @@ export default function SkillsPanel() {
             try {
                 const content = await invoke<string>("read_skill", { name });
                 setSkillContent((prev) => ({ ...prev, [name]: content }));
-            } catch { /* ignore */ }
+            } catch {
+                /* ignore */
+            }
         }
     };
 
@@ -104,108 +109,18 @@ export default function SkillsPanel() {
     return (
         <div className="h-full overflow-y-auto p-8">
             <div className="mx-auto max-w-3xl flex flex-col gap-6">
+                <BuiltinToolsSection builtinDisabled={builtinDisabled} onToggleBuiltin={toggleBuiltin} />
 
-                {/* ─── Section Outils intégrés ───────────────────────────── */}
-                <div className="flex flex-col gap-3">
-                    <div>
-                        <h2 className="text-2xl font-semibold text-white">Outils intégrés</h2>
-                        <p className="mt-1 text-sm text-slate-400">
-                            Capacités natives de l&apos;IA · désactiver un outil supprime son prompt système
-                        </p>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                        {BUILTIN_TOOLS.map((tool) => {
-                            const enabled = !builtinDisabled.has(tool.id);
-                            return (
-                                <div
-                                    key={tool.id}
-                                    className={`rounded-2xl border px-4 py-3 flex items-center gap-4 transition-all ${
-                                        enabled
-                                            ? "border-white/10 bg-white/5"
-                                            : "border-white/5 bg-white/[0.02] opacity-50"
-                                    }`}
-                                >
-                                    <button
-                                        onClick={() => toggleBuiltin(tool.id)}
-                                        title={enabled ? "Désactiver" : "Activer"}
-                                        className={`relative flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
-                                            enabled ? "bg-emerald-500" : "bg-slate-700"
-                                        }`}
-                                    >
-                                        <span
-                                            className={`absolute h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                                                enabled ? "translate-x-6" : "translate-x-1"
-                                            }`}
-                                        />
-                                    </button>
-                                    <span className="text-xl shrink-0">{tool.icon}</span>
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-sm font-medium text-white">{tool.label}</span>
-                                            <span className="rounded-md border border-slate-500/30 bg-slate-500/10 px-1.5 py-0.5 text-[0.6rem] font-medium text-slate-400">
-                                                intégré
-                                            </span>
-                                            {!enabled && (
-                                                <span className="rounded-md bg-slate-700 px-2 py-0.5 text-[0.65rem] text-slate-400">inactif</span>
-                                            )}
-                                        </div>
-                                        <p className="mt-0.5 text-xs text-slate-500 truncate">{tool.description}</p>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
+                <SkillsPanelHeader
+                    enabledCount={enabledCount}
+                    totalCount={skills.length}
+                    loading={loading}
+                    hasDisabledSkills={skills.some((s) => !isEnabled(s.name))}
+                    onEnableAll={enableAll}
+                    onRefresh={refresh}
+                />
 
-                {/* ─── Section Skills utilisateur ─────────────────────────── */}
-                {/* En-tête */}
-                <div className="flex items-center justify-between">
-                    <div>
-                        <h2 className="text-2xl font-semibold text-white">Skills</h2>
-                        <p className="mt-1 text-sm text-slate-400">
-                            Scripts créés par l&apos;IA · {enabledCount}/{skills.length} actifs dans le contexte
-                        </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        {skills.some((s) => !isEnabled(s.name)) && (
-                            <button
-                                onClick={enableAll}
-                                className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300 transition hover:bg-emerald-500/20"
-                            >
-                                Tout activer
-                            </button>
-                        )}
-                        <button
-                            onClick={refresh}
-                            disabled={loading}
-                            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 transition hover:border-blue-400/40 hover:text-blue-300 disabled:opacity-50"
-                        >
-                            {loading ? "…" : "↻ Rafraîchir"}
-                        </button>
-                    </div>
-                </div>
-
-                {skills.length === 0 && !loading && (
-                    <div className="rounded-3xl border border-white/10 bg-white/5 p-8 text-center">
-                        <p className="text-4xl mb-4">🧩</p>
-                        <p className="text-slate-300 font-medium">Aucun skill créé</p>
-                        <p className="mt-2 text-sm text-slate-500">
-                            Demande à l&apos;IA de créer un skill. Elle peut sauvegarder des scripts
-                            PowerShell, Python et Node.js réutilisables automatiquement.
-                        </p>
-                        <div className="mt-4 flex flex-col gap-2">
-                            <p className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-3 text-xs text-slate-400 font-mono text-left">
-                                🖥 &quot;Crée un skill PS1 pour lister les processus qui consomment le plus de CPU&quot;
-                            </p>
-                            <p className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-3 text-xs text-slate-400 font-mono text-left">
-                                🐍 &quot;Crée un skill Python qui analyse un fichier CSV et retourne des stats&quot;
-                            </p>
-                            <p className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-3 text-xs text-slate-400 font-mono text-left">
-                                ⬡ &quot;Crée un skill Node.js qui surveille un port réseau&quot;
-                            </p>
-                        </div>
-                    </div>
-                )}
+                {skills.length === 0 && !loading && <EmptySkillsState />}
 
                 <div className="flex flex-col gap-3">
                     {skills.map((skill) => {
@@ -217,10 +132,9 @@ export default function SkillsPanel() {
                         return (
                             <div
                                 key={skill.name}
-                                className={`rounded-3xl border transition-all ${enabled
-                                    ? "border-white/10 bg-white/5"
-                                    : "border-white/5 bg-white/[0.02] opacity-60"
-                                    }`}
+                                className={`rounded-3xl border transition-all ${
+                                    enabled ? "border-white/10 bg-white/5" : "border-white/5 bg-white/[0.02] opacity-60"
+                                }`}
                             >
                                 {/* Ligne principale */}
                                 <div className="flex items-center gap-4 px-5 py-4">
@@ -228,25 +142,29 @@ export default function SkillsPanel() {
                                     <button
                                         onClick={() => toggle(skill.name)}
                                         title={enabled ? "Désactiver ce skill" : "Activer ce skill"}
-                                        className={`relative flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${enabled ? "bg-emerald-500" : "bg-slate-700"
-                                            }`}
+                                        className={`relative flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                                            enabled ? "bg-emerald-500" : "bg-slate-700"
+                                        }`}
                                     >
                                         <span
-                                            className={`absolute h-4 w-4 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-6" : "translate-x-1"
-                                                }`}
+                                            className={`absolute h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                                                enabled ? "translate-x-6" : "translate-x-1"
+                                            }`}
                                         />
                                     </button>
 
                                     {/* Infos */}
                                     <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2">
                                             <span className="font-mono text-sm font-medium text-white">
                                                 {skill.name}
                                             </span>
                                             {(() => {
                                                 const badge = SKILL_TYPE_BADGE[skill.skill_type];
                                                 return badge ? (
-                                                    <span className={`rounded-md border px-1.5 py-0.5 text-[0.6rem] font-medium ${badge.color}`}>
+                                                    <span
+                                                        className={`rounded-md border px-1.5 py-0.5 text-[0.6rem] font-medium ${badge.color}`}
+                                                    >
                                                         {badge.icon} {badge.label}
                                                     </span>
                                                 ) : null;
@@ -284,10 +202,11 @@ export default function SkillsPanel() {
                                         </button>
                                         <button
                                             onClick={() => handleDelete(skill.name)}
-                                            className={`rounded-2xl border px-3 py-1.5 text-xs transition ${confirmDelete === skill.name
-                                                ? "border-red-400/60 bg-red-500/20 text-red-300"
-                                                : "border-white/10 bg-white/5 text-slate-500 hover:border-red-400/40 hover:text-red-400"
-                                                }`}
+                                            className={`rounded-2xl border px-3 py-1.5 text-xs transition ${
+                                                confirmDelete === skill.name
+                                                    ? "border-red-400/60 bg-red-500/20 text-red-300"
+                                                    : "border-white/10 bg-white/5 text-slate-500 hover:border-red-400/40 hover:text-red-400"
+                                            }`}
                                         >
                                             {confirmDelete === skill.name ? "Confirmer ?" : "✕"}
                                         </button>

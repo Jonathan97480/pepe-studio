@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{command, AppHandle, Manager, State};
+use tauri::{command, AppHandle, State};
 
 // ─── État partagé ─────────────────────────────────────────────────────────────
 
@@ -153,7 +153,9 @@ fn resolve_model_path(app: &AppHandle, model_path: &str) -> Result<PathBuf, Stri
             candidate.display()
         );
         if candidate.exists() {
-            return Ok(candidate.canonicalize().unwrap_or_else(|_| candidate.clone()));
+            return Ok(candidate
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.clone()));
         }
     }
 
@@ -270,13 +272,20 @@ fn resolve_first_existing(candidates: &[PathBuf], label: &str) -> Option<PathBuf
             candidate.display()
         );
         if candidate.exists() {
-            return Some(candidate.canonicalize().unwrap_or_else(|_| candidate.clone()));
+            return Some(
+                candidate
+                    .canonicalize()
+                    .unwrap_or_else(|_| candidate.clone()),
+            );
         }
     }
     None
 }
 
-fn resolve_llama_server_binary(app: &AppHandle, prefer_turboquant: bool) -> Result<PathBuf, String> {
+fn resolve_llama_server_binary(
+    app: &AppHandle,
+    prefer_turboquant: bool,
+) -> Result<PathBuf, String> {
     if prefer_turboquant {
         let turbo_candidates = turboquant_llama_server_candidates(app);
         if let Some(found) = resolve_first_existing(&turbo_candidates, "turboquant") {

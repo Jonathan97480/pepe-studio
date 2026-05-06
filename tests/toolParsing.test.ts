@@ -19,10 +19,7 @@ test("normalizeToolTags converts additional xml-style tool tags", () => {
         normalizeToolTags('<generate_image prompt="sunset over mountains"/>'),
         '<tool>{"generate_image": "sunset over mountains"}</tool>',
     );
-    assert.equal(
-        normalizeToolTags('<analyze_folder path="E:/docs"/>'),
-        '<tool>{"analyze_folder": "E:/docs"}</tool>',
-    );
+    assert.equal(normalizeToolTags('<analyze_folder path="E:/docs"/>'), '<tool>{"analyze_folder": "E:/docs"}</tool>');
     assert.equal(normalizeToolTags('<read_image path="E:/img/a.png"/>'), '<tool>{"read_image": "E:/img/a.png"}</tool>');
     assert.equal(normalizeToolTags('<read_pdf path="E:/pdf/a.pdf"/>'), '<tool>{"read_pdf": "E:/pdf/a.pdf"}</tool>');
     assert.equal(
@@ -37,13 +34,10 @@ test("normalizeToolTags converts additional xml-style tool tags", () => {
         normalizeToolTags('<list_folder_images path="E:/img"/>'),
         '<tool>{"list_folder_images": "E:/img"}</tool>',
     );
-    assert.equal(
-        normalizeToolTags('<list_folder_pdfs path="E:/pdf"/>'),
-        '<tool>{"list_folder_pdfs": "E:/pdf"}</tool>',
-    );
+    assert.equal(normalizeToolTags('<list_folder_pdfs path="E:/pdf"/>'), '<tool>{"list_folder_pdfs": "E:/pdf"}</tool>');
     assert.equal(normalizeToolTags('<get_tool_doc tool="write_file"/>'), '<tool>{"get_tool_doc": "write_file"}</tool>');
-    assert.equal(normalizeToolTags('<get_hardware_info/>'), '<tool>{"get_hardware_info": true}</tool>');
-    assert.equal(normalizeToolTags('<list_sd_models/>'), '<tool>{"list_sd_models": true}</tool>');
+    assert.equal(normalizeToolTags("<get_hardware_info/>"), '<tool>{"get_hardware_info": true}</tool>');
+    assert.equal(normalizeToolTags("<list_sd_models/>"), '<tool>{"list_sd_models": true}</tool>');
 });
 
 test("sanitizeLlmJson escapes raw newlines inside string values", () => {
@@ -86,3 +80,4 @@ test("extractWriteFileTags parses direct write_file tags", () => {
     const tags = extractWriteFileTags('<write_file path="E:/demo/index.html"><h1>Hello</h1></write_file>');
     assert.deepEqual(tags, [{ path: "E:/demo/index.html", content: "<h1>Hello</h1>" }]);
 });
+

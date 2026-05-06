@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-export type TurboQuantType = "none" | "q8_0" | "q4_0" | "q4_1" | "q5_0" | "q5_1";
+export type TurboQuantType = "none" | "q8_0" | "q4_0" | "q4_1" | "q5_0" | "q5_1" | "turbo3" | "turbo4";
 
 export type SamplingSettings = {
     topP: number;
@@ -121,8 +121,10 @@ export function ModelSettingsProvider({ children }: { children: ReactNode }) {
     const [reasoningBudget, setReasoningBudget] = useState(defaultSettings.reasoningBudget);
     const [sampling, setSampling] = useState<SamplingSettings>(defaultSettings.sampling);
     const [thinkingEnabled, setThinkingEnabled] = useState(defaultSettings.thinkingEnabled);
-    const [sdModelPath, setSdModelPath] = useState<string | null>(
-        () => localStorage.getItem("customapp_sd_model_path") ?? defaultSettings.sdModelPath,
+    const [sdModelPath, setSdModelPath] = useState<string | null>(() =>
+        typeof window !== "undefined"
+            ? (localStorage.getItem("customapp_sd_model_path") ?? defaultSettings.sdModelPath)
+            : defaultSettings.sdModelPath,
     );
     const [isModelLoaded, setIsModelLoaded] = useState(false);
     const [loadedModelPath, setLoadedModelPath] = useState<string | null>(null);

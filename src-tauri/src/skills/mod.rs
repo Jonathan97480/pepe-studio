@@ -6,5 +6,4 @@ pub mod manager;
 pub use executor::run_skill;
 pub use manager::{
     create_skill, delete_skill, get_plan, list_skills, patch_skill, read_skill, save_plan,
-    CompositeSkillConfig, CompositeStep, HttpSkillConfig, RouteConfig, SkillMeta,
 };

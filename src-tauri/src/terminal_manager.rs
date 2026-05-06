@@ -15,12 +15,9 @@ use tauri::{command, State};
 
 use crate::terminal_parser::{extract_cwd, requires_interactive, CWD_MARKER};
 
-// ── Re-exports plats (compat main.rs inchangé) ────────────────────────────────
-pub use crate::terminal_parser::{extract_cwd as _reexport_extract_cwd, parse_command};
 pub use crate::terminal_pty::{
     terminal_kill_interactive, terminal_pty_resize, terminal_send_stdin,
-    terminal_start_interactive, InteractiveState, PtySession, TerminalDoneEvent,
-    TerminalOutputEvent,
+    terminal_start_interactive, InteractiveState,
 };
 
 // ─── Types publics ────────────────────────────────────────────────────────────

@@ -5,6 +5,8 @@ import { invoke } from "@tauri-apps/api/tauri";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import TerminalListSidebar from "@/components/terminal/TerminalListSidebar";
+import TerminalStatusBar from "@/components/terminal/TerminalStatusBar";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -246,59 +248,13 @@ export default function TerminalPanel() {
 
     return (
         <div className="flex h-full overflow-hidden">
-            {/* ── Sidebar : liste des terminaux ─────────────────────────────── */}
-            <div className="w-64 shrink-0 border-r border-white/10 flex flex-col gap-2 p-4 overflow-y-auto">
-                <p className="text-xs uppercase tracking-widest text-slate-400 mb-1">Terminaux actifs</p>
-
-                {terminals.length === 0 ? (
-                    <div className="mt-4 text-sm text-slate-500 leading-relaxed">
-                        <p>Aucun terminal ouvert.</p>
-                        <p className="mt-2 text-xs">L&apos;IA créera des terminaux automatiquement lors des tâches.</p>
-                    </div>
-                ) : (
-                    terminals.map((t) => (
-                        <div
-                            key={t.id}
-                            onClick={() => setSelected(t.id)}
-                            className={`group relative rounded-2xl border p-3 cursor-pointer transition ${
-                                selected === t.id
-                                    ? "border-blue-500/50 bg-blue-500/10"
-                                    : "border-white/10 bg-white/5 hover:bg-white/10"
-                            }`}
-                        >
-                            <div className="flex items-start gap-2">
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-1.5">
-                                        {t.is_running && (
-                                            <span
-                                                className="h-2 w-2 rounded-full bg-orange-400 animate-pulse shrink-0"
-                                                title="Processus en cours"
-                                            />
-                                        )}
-                                        <p className="text-sm font-medium truncate">{t.name}</p>
-                                    </div>
-                                    <p className="text-xs text-slate-400 font-mono truncate mt-0.5">{t.cwd}</p>
-                                    <p className="text-xs text-slate-500 mt-1">
-                                        {t.entry_count} cmd{t.entry_count !== 1 ? "s" : ""}
-                                        {t.is_running && <span className="ml-1 text-orange-400">• actif</span>}
-                                    </p>
-                                </div>
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleClose(t.id);
-                                    }}
-                                    disabled={closing === t.id}
-                                    title="Fermer ce terminal"
-                                    className="opacity-0 group-hover:opacity-100 shrink-0 mt-0.5 text-red-400 hover:text-red-300 text-xs transition-opacity disabled:opacity-40"
-                                >
-                                    ✕
-                                </button>
-                            </div>
-                        </div>
-                    ))
-                )}
-            </div>
+            <TerminalListSidebar
+                terminals={terminals}
+                selected={selected}
+                closing={closing}
+                onSelect={setSelected}
+                onClose={handleClose}
+            />
 
             {/* ── Zone principale : xterm.js ────────────────────────────────── */}
             <div className="flex-1 flex flex-col overflow-hidden">
@@ -309,27 +265,12 @@ export default function TerminalPanel() {
                     </div>
                 ) : (
                     <>
-                        {/* Barre d'état */}
-                        <div className="shrink-0 border-b border-white/10 px-6 py-3 flex items-center gap-3">
-                            <span
-                                className={`h-2 w-2 rounded-full ${
-                                    isRunning ? "bg-orange-400 animate-pulse" : "bg-emerald-400"
-                                }`}
-                            />
-                            <span className="text-sm text-slate-300 font-mono truncate">
-                                {selectedInfo?.cwd ?? "…"}
-                            </span>
-                            <span className="ml-auto text-xs text-slate-500 shrink-0">{selectedInfo?.name}</span>
-                            {isRunning && (
-                                <button
-                                    onClick={handleKill}
-                                    title="Envoyer Ctrl+C pour arrêter le processus"
-                                    className="ml-1 shrink-0 rounded-lg border border-red-500/40 bg-red-500/10 px-2 py-1 text-xs text-red-400 hover:bg-red-500/20 transition"
-                                >
-                                    ⊘ Stopper
-                                </button>
-                            )}
-                        </div>
+                        <TerminalStatusBar
+                            isRunning={isRunning}
+                            cwd={selectedInfo?.cwd}
+                            name={selectedInfo?.name}
+                            onKill={handleKill}
+                        />
 
                         {/* Conteneur xterm.js — reçoit le canvas du terminal */}
                         <div

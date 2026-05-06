@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.stripSystemTags = exports.resizeImageToDataUrl = exports.sanitizeLlmJson = exports.parseMessageSegments = exports.normalizeToolTags = exports.extractWriteFileTool = exports.extractSimpleTool = void 0;
+exports.buildFallbackConversationTitle = buildFallbackConversationTitle;
 exports.invokeWithTimeout = invokeWithTimeout;
 const tauri_1 = require("@tauri-apps/api/tauri");
 var toolParsing_1 = require("./toolParsing");
@@ -9,6 +10,14 @@ Object.defineProperty(exports, "extractWriteFileTool", { enumerable: true, get: 
 Object.defineProperty(exports, "normalizeToolTags", { enumerable: true, get: function () { return toolParsing_1.normalizeToolTags; } });
 Object.defineProperty(exports, "parseMessageSegments", { enumerable: true, get: function () { return toolParsing_1.parseMessageSegments; } });
 Object.defineProperty(exports, "sanitizeLlmJson", { enumerable: true, get: function () { return toolParsing_1.sanitizeLlmJson; } });
+/** Génère un titre de secours pour une conversation à partir des messages. */
+function buildFallbackConversationTitle(messages) {
+    const lastUser = [...messages].reverse().find((msg) => msg.role === "user" && msg.content.trim());
+    const source = (lastUser?.content ?? "Nouvelle conversation").replace(/📎.*$/g, "").replace(/\s+/g, " ").trim();
+    const words = source.split(" ").filter(Boolean).slice(0, 6);
+    const title = words.join(" ").trim();
+    return title || "Nouvelle conversation";
+}
 /** Appelle une commande Tauri avec un timeout. Lance une erreur si pas de réponse dans `ms` ms. */
 function invokeWithTimeout(cmd, args, ms) {
     return Promise.race([

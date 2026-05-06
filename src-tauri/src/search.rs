@@ -27,17 +27,20 @@ pub async fn search_web(
         return Err("Requête trop longue (max 500 caractères)".to_string());
     }
     match source.unwrap_or_else(|| "duckduckgo".to_string()).as_str() {
-        "brave"  => search_brave(q, api_key, locale).await,
+        "brave" => search_brave(q, api_key, locale).await,
         "serper" => search_serper(q, api_key, locale).await,
         "tavily" => search_tavily(q, api_key).await,
         "searxng" => search_searxng(q, searxng_url, locale).await,
-        _        => search_duckduckgo(q, locale).await,
+        _ => search_duckduckgo(q, locale).await,
     }
 }
 
 // ── DuckDuckGo (aucune clé requise) ──────────────────────────────────────────
 
-async fn search_duckduckgo(query: String, locale: Option<String>) -> Result<Vec<SearchResult>, String> {
+async fn search_duckduckgo(
+    query: String,
+    locale: Option<String>,
+) -> Result<Vec<SearchResult>, String> {
     let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
     let req_url = format!("https://html.duckduckgo.com/html/?q={}", encoded);
 
@@ -50,9 +53,10 @@ async fn search_duckduckgo(query: String, locale: Option<String>) -> Result<Vec<
     headers.insert(USER_AGENT, HeaderValue::from_static(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     ));
-    headers.insert(ACCEPT, HeaderValue::from_static(
-        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    ));
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    );
     if let Ok(v) = HeaderValue::from_str(&format!("{},en;q=0.8", lang)) {
         headers.insert(ACCEPT_LANGUAGE, v);
     }
@@ -73,21 +77,31 @@ async fn search_duckduckgo(query: String, locale: Option<String>) -> Result<Vec<
         .map_err(|e| format!("Erreur lecture: {e}"))?;
 
     let document = Html::parse_document(&html_text);
-    let title_sel   = Selector::parse("a.result__a").expect("selecteur CSS statique valide");
-    let snippet_sel = Selector::parse("a.result__snippet, .result__snippet").expect("selecteur CSS statique valide");
+    let title_sel = Selector::parse("a.result__a").expect("selecteur CSS statique valide");
+    let snippet_sel = Selector::parse("a.result__snippet, .result__snippet")
+        .expect("selecteur CSS statique valide");
 
-    let titles:   Vec<_> = document.select(&title_sel).collect();
+    let titles: Vec<_> = document.select(&title_sel).collect();
     let snippets: Vec<_> = document.select(&snippet_sel).collect();
 
     let mut results: Vec<SearchResult> = Vec::new();
     let mut snippet_idx = 0;
     for title_el in titles.iter().take(10) {
-        let title = title_el.text().collect::<Vec<_>>().join("").trim().to_string();
-        if title.is_empty() { continue; }
+        let title = title_el
+            .text()
+            .collect::<Vec<_>>()
+            .join("")
+            .trim()
+            .to_string();
+        if title.is_empty() {
+            continue;
+        }
 
         let raw_href = title_el.value().attr("href").unwrap_or("");
         let url = extract_ddg_url(raw_href);
-        if url.is_empty() { continue; }
+        if url.is_empty() {
+            continue;
+        }
 
         let snippet = snippets
             .get(snippet_idx)
@@ -95,11 +109,18 @@ async fn search_duckduckgo(query: String, locale: Option<String>) -> Result<Vec<
             .unwrap_or_default();
         snippet_idx += 1;
 
-        results.push(SearchResult { title, snippet, url, source: "duckduckgo".to_string() });
+        results.push(SearchResult {
+            title,
+            snippet,
+            url,
+            source: "duckduckgo".to_string(),
+        });
     }
 
     if results.is_empty() {
-        return Err("Aucun résultat trouvé (DuckDuckGo a peut-être retourné un CAPTCHA)".to_string());
+        return Err(
+            "Aucun résultat trouvé (DuckDuckGo a peut-être retourné un CAPTCHA)".to_string(),
+        );
     }
     Ok(results)
 }
@@ -132,12 +153,19 @@ fn extract_ddg_url(href: &str) -> String {
 
 // ── Brave Search API ──────────────────────────────────────────────────────────
 
-async fn search_brave(query: String, api_key: Option<String>, locale: Option<String>) -> Result<Vec<SearchResult>, String> {
+async fn search_brave(
+    query: String,
+    api_key: Option<String>,
+    locale: Option<String>,
+) -> Result<Vec<SearchResult>, String> {
     let key = api_key
         .filter(|k| !k.trim().is_empty())
         .ok_or("Clé API Brave manquante. Va dans Paramètres → Recherche Web et renseigne ta clé Brave Search.")?;
 
-    let lang = locale.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or("fr");
+    let lang = locale
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("fr");
     let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
     let req_url = format!(
         "https://api.search.brave.com/res/v1/web/search?q={}&count=10&search_lang={}&ui_lang={}",
@@ -169,25 +197,36 @@ async fn search_brave(query: String, api_key: Option<String>, locale: Option<Str
 
     let empty = vec![];
     let items = resp["web"]["results"].as_array().unwrap_or(&empty);
-    let results = items.iter().take(10).filter_map(|item| {
-        Some(SearchResult {
-            title:   item["title"].as_str()?.to_string(),
-            snippet: item["description"].as_str().unwrap_or("").to_string(),
-            url:     item["url"].as_str()?.to_string(),
-            source:  "brave".to_string(),
+    let results = items
+        .iter()
+        .take(10)
+        .filter_map(|item| {
+            Some(SearchResult {
+                title: item["title"].as_str()?.to_string(),
+                snippet: item["description"].as_str().unwrap_or("").to_string(),
+                url: item["url"].as_str()?.to_string(),
+                source: "brave".to_string(),
+            })
         })
-    }).collect();
+        .collect();
     Ok(results)
 }
 
 // ── Serper API (Google) ───────────────────────────────────────────────────────
 
-async fn search_serper(query: String, api_key: Option<String>, locale: Option<String>) -> Result<Vec<SearchResult>, String> {
-    let key = api_key
-        .filter(|k| !k.trim().is_empty())
-        .ok_or("Clé API Serper manquante. Va dans Paramètres → Recherche Web et renseigne ta clé Serper.")?;
+async fn search_serper(
+    query: String,
+    api_key: Option<String>,
+    locale: Option<String>,
+) -> Result<Vec<SearchResult>, String> {
+    let key = api_key.filter(|k| !k.trim().is_empty()).ok_or(
+        "Clé API Serper manquante. Va dans Paramètres → Recherche Web et renseigne ta clé Serper.",
+    )?;
 
-    let lang = locale.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or("fr");
+    let lang = locale
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("fr");
     let body = serde_json::json!({ "q": query, "num": 10, "gl": lang });
 
     let mut headers = HeaderMap::new();
@@ -216,23 +255,30 @@ async fn search_serper(query: String, api_key: Option<String>, locale: Option<St
 
     let empty = vec![];
     let items = resp["organic"].as_array().unwrap_or(&empty);
-    let results = items.iter().take(10).filter_map(|item| {
-        Some(SearchResult {
-            title:   item["title"].as_str()?.to_string(),
-            snippet: item["snippet"].as_str().unwrap_or("").to_string(),
-            url:     item["link"].as_str()?.to_string(),
-            source:  "serper".to_string(),
+    let results = items
+        .iter()
+        .take(10)
+        .filter_map(|item| {
+            Some(SearchResult {
+                title: item["title"].as_str()?.to_string(),
+                snippet: item["snippet"].as_str().unwrap_or("").to_string(),
+                url: item["link"].as_str()?.to_string(),
+                source: "serper".to_string(),
+            })
         })
-    }).collect();
+        .collect();
     Ok(results)
 }
 
 // ── Tavily API ────────────────────────────────────────────────────────────────
 
-async fn search_tavily(query: String, api_key: Option<String>) -> Result<Vec<SearchResult>, String> {
-    let key = api_key
-        .filter(|k| !k.trim().is_empty())
-        .ok_or("Clé API Tavily manquante. Va dans Paramètres → Recherche Web et renseigne ta clé Tavily.")?;
+async fn search_tavily(
+    query: String,
+    api_key: Option<String>,
+) -> Result<Vec<SearchResult>, String> {
+    let key = api_key.filter(|k| !k.trim().is_empty()).ok_or(
+        "Clé API Tavily manquante. Va dans Paramètres → Recherche Web et renseigne ta clé Tavily.",
+    )?;
 
     let body = serde_json::json!({
         "query": query,
@@ -267,28 +313,42 @@ async fn search_tavily(query: String, api_key: Option<String>) -> Result<Vec<Sea
 
     let empty = vec![];
     let items = resp["results"].as_array().unwrap_or(&empty);
-    let results = items.iter().take(10).filter_map(|item| {
-        Some(SearchResult {
-            title:   item["title"].as_str()?.to_string(),
-            snippet: item["content"].as_str().unwrap_or("").to_string(),
-            url:     item["url"].as_str()?.to_string(),
-            source:  "tavily".to_string(),
+    let results = items
+        .iter()
+        .take(10)
+        .filter_map(|item| {
+            Some(SearchResult {
+                title: item["title"].as_str()?.to_string(),
+                snippet: item["content"].as_str().unwrap_or("").to_string(),
+                url: item["url"].as_str()?.to_string(),
+                source: "tavily".to_string(),
+            })
         })
-    }).collect();
+        .collect();
     Ok(results)
 }
 
 // ── SearXNG (instance publique ou privée) ──────────────────────────────────────
 
-async fn search_searxng(query: String, base_url: Option<String>, locale: Option<String>) -> Result<Vec<SearchResult>, String> {
+async fn search_searxng(
+    query: String,
+    base_url: Option<String>,
+    locale: Option<String>,
+) -> Result<Vec<SearchResult>, String> {
     let url = base_url
         .filter(|u| !u.trim().is_empty())
         .ok_or("URL du serveur SearXNG manquante. Va dans Paramètres → Configuration et renseigne l'URL de ton instance SearXNG.")?;
 
     let base_url_clean = url.trim_end_matches('/');
-    let lang = locale.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or("fr");
+    let lang = locale
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("fr");
     let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
-    let req_url = format!("{}/search?q={}&format=json&language={}", base_url_clean, encoded, lang);
+    let req_url = format!(
+        "{}/search?q={}&format=json&language={}",
+        base_url_clean, encoded, lang
+    );
 
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static(
@@ -312,18 +372,21 @@ async fn search_searxng(query: String, base_url: Option<String>, locale: Option<
 
     let empty = vec![];
     let items = resp["results"].as_array().unwrap_or(&empty);
-    let results: Vec<SearchResult> = items.iter().take(10).filter_map(|item| {
-        Some(SearchResult {
-            title:   item["title"].as_str()?.to_string(),
-            snippet: item["content"].as_str().unwrap_or("").to_string(),
-            url:     item["url"].as_str()?.to_string(),
-            source:  "searxng".to_string(),
+    let results: Vec<SearchResult> = items
+        .iter()
+        .take(10)
+        .filter_map(|item| {
+            Some(SearchResult {
+                title: item["title"].as_str()?.to_string(),
+                snippet: item["content"].as_str().unwrap_or("").to_string(),
+                url: item["url"].as_str()?.to_string(),
+                source: "searxng".to_string(),
+            })
         })
-    }).collect();
+        .collect();
 
     if results.is_empty() {
         return Err("Aucun résultat trouvé sur SearXNG".to_string());
     }
     Ok(results)
 }
-

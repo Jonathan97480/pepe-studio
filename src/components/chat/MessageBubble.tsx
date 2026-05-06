@@ -2,12 +2,11 @@
 
 import React from "react";
 import { invoke } from "@tauri-apps/api/tauri";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { markdownComponents } from "./CodeBlock";
+import GeneratedImageBubble from "./GeneratedImageBubble";
+import MessageMarkdown from "./MessageMarkdown";
+import ThinkingPanel from "./ThinkingPanel";
+import ToolCallPill from "./ToolCallPill";
 import { normalizeToolTags, sanitizeLlmJson, parseMessageSegments } from "../../lib/chatUtils";
 import type { LlamaMessage } from "../../hooks/useLlama";
 
@@ -99,68 +98,19 @@ export function MessageBubble({
     // ── Image générée (rendu natif, évite les problèmes ReactMarkdown/CSP) ──
     if (message.imageDataUrl) {
         return (
-            <div key={index} className="flex flex-col gap-1 self-start max-w-[80%]">
-                <div className="rounded-3xl overflow-hidden border border-white/10 bg-white/5 shadow-xl shadow-slate-950/20">
-                    {message.content && (
-                        <p className="px-4 pt-3 pb-2 text-sm font-semibold text-slate-300">{message.content}</p>
-                    )}
-                    <img
-                        src={message.imageDataUrl}
-                        alt="image générée"
-                        className="max-w-full rounded-b-3xl block cursor-zoom-in"
-                        style={{ maxHeight: "512px", objectFit: "contain" }}
-                        onClick={() => setLightboxOpen(true)}
-                    />
-                </div>
-                <div className="mt-2 flex items-center gap-2">
-                    <button
-                        type="button"
-                        onClick={() => setLightboxOpen(true)}
-                        className="rounded-xl border border-cyan-500/30 bg-cyan-900/20 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:border-cyan-400/60"
-                    >
-                        Ouvrir en grand
-                    </button>
-                    <button
-                        type="button"
-                        onClick={handleSaveImageAs}
-                        disabled={isSavingImage}
-                        className="rounded-xl border border-emerald-500/30 bg-emerald-900/20 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:border-emerald-400/60 disabled:opacity-60"
-                    >
-                        {isSavingImage ? "Téléchargement..." : "Télécharger..."}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={handleDeleteImage}
-                        disabled={isDeletingImage}
-                        className="rounded-xl border border-rose-500/30 bg-rose-900/20 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:border-rose-400/60 disabled:opacity-60"
-                    >
-                        {isDeletingImage ? "Suppression..." : "Supprimer"}
-                    </button>
-                </div>
-                {saveStatus ? <p className="text-[0.68rem] text-slate-400">{saveStatus}</p> : null}
-
-                {lightboxOpen ? (
-                    <div
-                        className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 p-4"
-                        onClick={() => setLightboxOpen(false)}
-                    >
-                        <div className="relative max-h-full max-w-6xl" onClick={(e) => e.stopPropagation()}>
-                            <button
-                                type="button"
-                                onClick={() => setLightboxOpen(false)}
-                                className="absolute right-2 top-2 rounded-full bg-black/60 px-3 py-1 text-sm text-white"
-                            >
-                                Fermer
-                            </button>
-                            <img
-                                src={message.imageDataUrl}
-                                alt="image générée agrandie"
-                                className="max-h-[90vh] max-w-[95vw] rounded-xl border border-white/20 object-contain"
-                            />
-                        </div>
-                    </div>
-                ) : null}
-            </div>
+            <GeneratedImageBubble
+                index={index}
+                content={message.content}
+                imageDataUrl={message.imageDataUrl}
+                lightboxOpen={lightboxOpen}
+                onOpenLightbox={() => setLightboxOpen(true)}
+                onCloseLightbox={() => setLightboxOpen(false)}
+                onSaveImageAs={handleSaveImageAs}
+                onDeleteImage={handleDeleteImage}
+                isSavingImage={isSavingImage}
+                isDeletingImage={isDeletingImage}
+                saveStatus={saveStatus}
+            />
         );
     }
 
@@ -172,21 +122,12 @@ export function MessageBubble({
     const renderToolPill = (key: string, toolDetails: string) => {
         const isExpandedTool = expandedToolCalls[key] ?? false;
         return (
-            <div key={key} className="self-start max-w-[80%]">
-                <button
-                    type="button"
-                    onClick={() => setExpandedToolCalls((prev) => ({ ...prev, [key]: !prev[key] }))}
-                    className="flex items-center gap-2 rounded-2xl border border-amber-500/20 bg-amber-500/5 px-4 py-2 text-sm text-amber-400/60 transition hover:border-amber-500/40 hover:text-amber-300"
-                >
-                    <span className="text-base">🔧</span>
-                    <span className="text-xs font-medium tracking-widest">call tools</span>
-                    <span className="text-[0.6rem] opacity-40 ml-1">{isExpandedTool ? "▲" : "▼"}</span>
-                </button>
-                {isExpandedTool && (
-                    <div className="mt-1 rounded-2xl border border-amber-500/15 bg-slate-950/60 px-4 py-3 max-h-64 overflow-auto">
-                        <pre className="text-xs text-slate-400 whitespace-pre-wrap font-mono">{toolDetails}</pre>
-                    </div>
-                )}
+            <div key={key}>
+                <ToolCallPill
+                    expanded={isExpandedTool}
+                    onToggle={() => setExpandedToolCalls((prev) => ({ ...prev, [key]: !prev[key] }))}
+                    details={toolDetails}
+                />
             </div>
         );
     };
@@ -222,15 +163,7 @@ export function MessageBubble({
                                         {message.role}
                                     </p>
                                 )}
-                                <div className="mt-2 text-base leading-7 break-words prose prose-invert max-w-none prose-p:my-1 prose-li:my-0 prose-headings:my-2 prose-table:border-collapse prose-th:border prose-th:border-white/20 prose-th:px-3 prose-th:py-1.5 prose-td:border prose-td:border-white/20 prose-td:px-3 prose-td:py-1.5">
-                                    <ReactMarkdown
-                                        remarkPlugins={[remarkGfm, remarkMath]}
-                                        rehypePlugins={[rehypeKatex]}
-                                        components={markdownComponents}
-                                    >
-                                        {seg.content}
-                                    </ReactMarkdown>
-                                </div>
+                                <MessageMarkdown content={seg.content} />
                             </div>
                         );
                     }
@@ -250,26 +183,12 @@ export function MessageBubble({
                     return renderToolPill(segKey, toolDetails);
                 })}
                 {hasThinking ? (
-                    <div className="mt-1 rounded-2xl border border-white/10 bg-slate-950/80 p-3 self-start max-w-[80%]">
-                        <button
-                            type="button"
-                            onClick={() => toggleThinking(index)}
-                            className="text-xs font-medium uppercase tracking-[0.15em] text-slate-300 underline"
-                        >
-                            {isExpanded ? "Masquer la réflexion" : "Afficher la réflexion"}
-                        </button>
-                        {isExpanded ? (
-                            <div className="mt-2 max-h-56 overflow-auto text-xs leading-5 text-slate-300 prose prose-invert max-w-none prose-p:my-0.5 prose-li:my-0">
-                                <ReactMarkdown
-                                    remarkPlugins={[remarkGfm, remarkMath]}
-                                    rehypePlugins={[rehypeKatex]}
-                                    components={markdownComponents}
-                                >
-                                    {message.thinking ?? ""}
-                                </ReactMarkdown>
-                            </div>
-                        ) : null}
-                    </div>
+                    <ThinkingPanel
+                        expanded={isExpanded}
+                        onToggle={() => toggleThinking(index)}
+                        thinking={message.thinking ?? ""}
+                        className="mt-1 self-start max-w-[80%]"
+                    />
                 ) : null}
                 {message.meta ? (
                     <p className="text-[0.68rem] italic text-slate-500 px-1 text-left">{message.meta}</p>
@@ -287,17 +206,7 @@ export function MessageBubble({
             >
                 <p className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-300">{message.role}</p>
                 {/* Contenu toujours visible */}
-                <div
-                    className={`mt-2 text-base leading-7 break-words prose prose-invert max-w-none prose-p:my-1 prose-li:my-0 prose-headings:my-2 prose-table:border-collapse prose-th:border prose-th:border-white/20 prose-th:px-3 prose-th:py-1.5 prose-td:border prose-td:border-white/20 prose-td:px-3 prose-td:py-1.5 ${isEditing ? "opacity-30 select-none" : ""}`}
-                >
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm, remarkMath]}
-                        rehypePlugins={[rehypeKatex]}
-                        components={markdownComponents}
-                    >
-                        {displayContent ?? ""}
-                    </ReactMarkdown>
-                </div>
+                <MessageMarkdown content={displayContent ?? ""} className={isEditing ? "opacity-30 select-none" : ""} />
                 {/* Formulaire d'édition en dessous, ne remplace pas le contenu */}
                 {isEditing ? (
                     <div className="mt-3 flex flex-col gap-2 border-t border-white/10 pt-3">
@@ -335,26 +244,11 @@ export function MessageBubble({
                     </div>
                 ) : null}
                 {hasThinking ? (
-                    <div className="mt-3 rounded-2xl border border-white/10 bg-slate-950/80 p-3">
-                        <button
-                            type="button"
-                            onClick={() => toggleThinking(index)}
-                            className="text-xs font-medium uppercase tracking-[0.15em] text-slate-300 underline"
-                        >
-                            {isExpanded ? "Masquer la réflexion" : "Afficher la réflexion"}
-                        </button>
-                        {isExpanded ? (
-                            <div className="mt-2 max-h-56 overflow-auto text-xs leading-5 text-slate-300 prose prose-invert max-w-none prose-p:my-0.5 prose-li:my-0">
-                                <ReactMarkdown
-                                    remarkPlugins={[remarkGfm, remarkMath]}
-                                    rehypePlugins={[rehypeKatex]}
-                                    components={markdownComponents}
-                                >
-                                    {message.thinking ?? ""}
-                                </ReactMarkdown>
-                            </div>
-                        ) : null}
-                    </div>
+                    <ThinkingPanel
+                        expanded={isExpanded}
+                        onToggle={() => toggleThinking(index)}
+                        thinking={message.thinking ?? ""}
+                    />
                 ) : null}
             </div>
             {/* Éditer + Supprimer — uniquement sur les messages utilisateur */}

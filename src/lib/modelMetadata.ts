@@ -12,8 +12,11 @@ export type ModelMetadata = {
     embedding_length: number;
     file_size_bytes: number;
     has_chat_template: boolean;
+    /** Nombre d'experts MoE (0 = modèle dense) */
+    expert_count: number;
 };
 
 export async function inspectModelMetadata(modelPath: string): Promise<ModelMetadata> {
     return invoke<ModelMetadata>("inspect_model_metadata", { modelPath });
 }
+

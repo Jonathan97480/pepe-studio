@@ -10,6 +10,19 @@ const toolParsing_1 = require("../src/lib/toolParsing");
     const normalized = (0, toolParsing_1.normalizeToolTags)('<cmd command="Get-Date" />');
     strict_1.default.equal(normalized, '<tool>{"cmd": "Get-Date"}</tool>');
 });
+(0, node_test_1.default)("normalizeToolTags converts additional xml-style tool tags", () => {
+    strict_1.default.equal((0, toolParsing_1.normalizeToolTags)('<generate_image prompt="sunset over mountains"/>'), '<tool>{"generate_image": "sunset over mountains"}</tool>');
+    strict_1.default.equal((0, toolParsing_1.normalizeToolTags)('<analyze_folder path="E:/docs"/>'), '<tool>{"analyze_folder": "E:/docs"}</tool>');
+    strict_1.default.equal((0, toolParsing_1.normalizeToolTags)('<read_image path="E:/img/a.png"/>'), '<tool>{"read_image": "E:/img/a.png"}</tool>');
+    strict_1.default.equal((0, toolParsing_1.normalizeToolTags)('<read_pdf path="E:/pdf/a.pdf"/>'), '<tool>{"read_pdf": "E:/pdf/a.pdf"}</tool>');
+    strict_1.default.equal((0, toolParsing_1.normalizeToolTags)('<read_pdf_brief path="E:/pdf/b.pdf"/>'), '<tool>{"read_pdf_brief": "E:/pdf/b.pdf"}</tool>');
+    strict_1.default.equal((0, toolParsing_1.normalizeToolTags)('<list_folder_files path="E:/docs"/>'), '<tool>{"list_folder_files": "E:/docs"}</tool>');
+    strict_1.default.equal((0, toolParsing_1.normalizeToolTags)('<list_folder_images path="E:/img"/>'), '<tool>{"list_folder_images": "E:/img"}</tool>');
+    strict_1.default.equal((0, toolParsing_1.normalizeToolTags)('<list_folder_pdfs path="E:/pdf"/>'), '<tool>{"list_folder_pdfs": "E:/pdf"}</tool>');
+    strict_1.default.equal((0, toolParsing_1.normalizeToolTags)('<get_tool_doc tool="write_file"/>'), '<tool>{"get_tool_doc": "write_file"}</tool>');
+    strict_1.default.equal((0, toolParsing_1.normalizeToolTags)('<get_hardware_info/>'), '<tool>{"get_hardware_info": true}</tool>');
+    strict_1.default.equal((0, toolParsing_1.normalizeToolTags)('<list_sd_models/>'), '<tool>{"list_sd_models": true}</tool>');
+});
 (0, node_test_1.default)("sanitizeLlmJson escapes raw newlines inside string values", () => {
     const sanitized = (0, toolParsing_1.sanitizeLlmJson)('{"cmd":"Write-Host "hello"\nnext"}');
     strict_1.default.ok(sanitized.includes("\\n"));

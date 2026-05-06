@@ -13,11 +13,11 @@ use tauri::command;
 // ── Re-exports plats — main.rs reste inchangé ─────────────────────────────────
 pub use crate::file_ops::{
     batch_rename_files, list_folder_files, list_folder_images, list_folder_pdfs, patch_file,
-    read_file_content, read_pdf_bytes, write_file, BatchRenameItem, BatchRenameResult,
+    read_file_content, read_pdf_bytes, write_file, BatchRenameItem,
 };
 pub use crate::media::{
     delete_generated_image, download_image, read_image, read_image_batch, read_pdf_batch,
-    save_image, save_image_as, ImageBatchItem, ImageReadResult, PdfBatchItem,
+    save_image, save_image_as,
 };
 pub use crate::shell_ops::run_shell_command;
 

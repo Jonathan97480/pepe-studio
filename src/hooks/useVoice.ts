@@ -1,9 +1,26 @@
 import { useRef, useState } from "react";
 
 // Web Speech API non standardisée — on déclare le type vendeur proprement
+type SpeechRecognitionResultItem = { transcript: string };
+type SpeechRecognitionResultListLike = {
+    [resultIndex: number]: { [alternativeIndex: number]: SpeechRecognitionResultItem };
+};
+type SpeechRecognitionEventLike = { results: SpeechRecognitionResultListLike };
+type SpeechRecognitionInstance = {
+    lang: string;
+    continuous: boolean;
+    interimResults: boolean;
+    onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+    onerror: (() => void) | null;
+    onend: (() => void) | null;
+    start: () => void;
+    stop: () => void;
+};
+type SpeechRecognitionCtor = new () => SpeechRecognitionInstance;
+
 interface SpeechRecognitionWindow extends Window {
-    SpeechRecognition?: typeof SpeechRecognition;
-    webkitSpeechRecognition?: typeof SpeechRecognition;
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
 }
 
 type UseVoiceResult = {
@@ -59,7 +76,7 @@ export function useVoice(): UseVoiceResult {
         rec.lang = "fr-FR";
         rec.continuous = false;
         rec.interimResults = false;
-        rec.onresult = (e: SpeechRecognitionEvent) => {
+        rec.onresult = (e: SpeechRecognitionEventLike) => {
             const transcript = (e.results[0][0].transcript as string).trim();
             onTranscript(transcript);
             setIsListening(false);

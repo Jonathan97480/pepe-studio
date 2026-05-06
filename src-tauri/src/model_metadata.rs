@@ -18,6 +18,8 @@ pub struct ModelMetadata {
     pub embedding_length: u64,
     pub file_size_bytes: u64,
     pub has_chat_template: bool,
+    /// Nombre d'experts MoE (0 = modèle dense)
+    pub expert_count: u64,
 }
 
 fn strip_unc_prefix(path: PathBuf) -> PathBuf {
@@ -77,7 +79,9 @@ fn resolve_model_path(app: &AppHandle, model_path: &str) -> Result<PathBuf, Stri
 
     for candidate in &candidates {
         if candidate.exists() {
-            return Ok(candidate.canonicalize().unwrap_or_else(|_| candidate.clone()));
+            return Ok(candidate
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.clone()));
         }
     }
 
@@ -188,7 +192,10 @@ fn read_bool_like(reader: &mut BufReader<File>, value_type: u32) -> Result<Optio
     }
 }
 
-fn read_string_like(reader: &mut BufReader<File>, value_type: u32) -> Result<Option<String>, String> {
+fn read_string_like(
+    reader: &mut BufReader<File>,
+    value_type: u32,
+) -> Result<Option<String>, String> {
     match value_type {
         8 => Ok(Some(read_gguf_string(reader)?)),
         _ => {
@@ -228,6 +235,7 @@ pub fn inspect_model_metadata(app: AppHandle, model_path: String) -> Result<Mode
     let mut value_length = 0u64;
     let mut embedding_length = 0u64;
     let mut has_chat_template = false;
+    let mut expert_count = 0u64;
 
     for _ in 0..metadata_kv_count {
         let key = read_gguf_string(&mut reader)?;
@@ -279,6 +287,11 @@ pub fn inspect_model_metadata(app: AppHandle, model_path: String) -> Result<Mode
                     embedding_length = value;
                 }
             }
+            _ if key.ends_with(".expert_count") => {
+                if let Some(value) = read_u64_like(&mut reader, value_type)? {
+                    expert_count = value;
+                }
+            }
             _ => {
                 if key.ends_with(".add_bos_token") || key.ends_with(".add_eos_token") {
                     let _ = read_bool_like(&mut reader, value_type)?;
@@ -301,5 +314,6 @@ pub fn inspect_model_metadata(app: AppHandle, model_path: String) -> Result<Mode
         embedding_length,
         file_size_bytes,
         has_chat_template,
+        expert_count,
     })
 }

@@ -5,6 +5,7 @@ exports.isActionTool = isActionTool;
 exports.describeTool = describeTool;
 exports.resolveToolDoc = resolveToolDoc;
 exports.buildCompactToolCatalog = buildCompactToolCatalog;
+exports.withAutoCritique = withAutoCritique;
 const toolDocs_1 = require("./toolDocs");
 exports.TOOL_CATALOG = [
     { id: "get_hardware_info", category: "machine", purpose: "obtenir la RAM, le CPU et le GPU détecté" },
@@ -172,4 +173,18 @@ function buildCompactToolCatalog(enabledIds) {
         return `[catégorie: ${category} - ce libellé n'est PAS une clé d'outil]\n${items}`;
     })
         .join("\n\n");
+}
+/**
+ * Injecte une directive d'auto-correction si la sortie contient des marqueurs d'erreur.
+ * Retourne la sortie inchangée si aucune erreur n'est détectée.
+ */
+function withAutoCritique(output, toolName) {
+    const stripped = output.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    const isError = /\b(error|exception|traceback|failed|erreur|introuvable|not found|cannot|refused|access denied|permission denied|syntax error|nameerror|typeerror|valueerror|referenceerror|cannot find|no such file|module not found|is not defined|unexpected token)\b/i.test(stripped);
+    if (!isError)
+        return output;
+    return (output +
+        `\n[Auto-correction] A failure marker was detected in tool "${toolName}". ` +
+        `Identify the real root cause, then apply a concrete fix ` +
+        `(patch_skill / patch_file / cmd selon le contexte). `);
 }

@@ -122,7 +122,9 @@ export function useConversationLoader({
                     onConversationReadyRef.current?.(requestedId);
                 })
                 .catch((e) =>
-                    onErrorRef.current?.(`Impossible de charger la conversation : ${(e as Error)?.message ?? String(e)}`),
+                    onErrorRef.current?.(
+                        `Impossible de charger la conversation : ${(e as Error)?.message ?? String(e)}`,
+                    ),
                 )
                 .finally(() => setIsLoadingConv(false));
         } else {
@@ -133,7 +135,9 @@ export function useConversationLoader({
                     onConversationReadyRef.current?.(id);
                 })
                 .catch((e) =>
-                    onErrorRef.current?.(`Impossible de démarrer la conversation : ${(e as Error)?.message ?? String(e)}`),
+                    onErrorRef.current?.(
+                        `Impossible de démarrer la conversation : ${(e as Error)?.message ?? String(e)}`,
+                    ),
                 );
         }
     }, [convRequest?.key, convRequest?.id]);

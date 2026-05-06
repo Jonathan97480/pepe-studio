@@ -25,17 +25,16 @@ pub use conversations::{
     get_project_structure, get_user_facts, list_conversations, load_conversation_messages,
     rename_conversation, save_conversation_plan, save_message, save_message_compressed,
     save_project_structure, search_conversation_messages, search_meta_tags, set_user_fact,
-    start_conversation, ConversationItem, ConversationMessage, MsgResult, UserFact,
+    start_conversation,
 };
 
 pub use documents::{
     delete_document, get_document_chunks, list_documents, search_chunks, store_document,
-    ChunkResult, DocumentChunkInput, DocumentMeta,
 };
 
 pub use models::{
     delete_model_config, get_all_model_configs, get_default_model, list_mmproj_files,
-    list_model_files, save_model_config, set_default_model, ModelConfig,
+    list_model_files, save_model_config, set_default_model,
 };
 
 pub use schema::init_db;

@@ -5,6 +5,7 @@ import type { MemoryEstimate } from "../lib/hardwareConfig";
 type Props = {
     estimate: MemoryEstimate | null;
     loading?: boolean;
+    turboquantBetaModeEnabled?: boolean;
 };
 
 function usageColor(ratio: number): string {
@@ -25,7 +26,7 @@ function fmtGb(value: number): string {
     return value < 0.01 ? "< 0.01" : value.toFixed(2);
 }
 
-export default function MemoryEstimationBar({ estimate, loading }: Props) {
+export default function MemoryEstimationBar({ estimate, loading, turboquantBetaModeEnabled }: Props) {
     if (loading) {
         return (
             <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
@@ -36,22 +37,15 @@ export default function MemoryEstimationBar({ estimate, loading }: Props) {
 
     if (!estimate) return null;
 
-    const ramRatio = estimate.available_ram_gb > 0
-        ? estimate.total_ram_gb / estimate.available_ram_gb
-        : 0;
-    const vramRatio = estimate.has_gpu && estimate.available_vram_gb > 0
-        ? estimate.total_vram_gb / estimate.available_vram_gb
-        : 0;
+    const ramRatio = estimate.available_ram_gb > 0 ? estimate.total_ram_gb / estimate.available_ram_gb : 0;
+    const vramRatio =
+        estimate.has_gpu && estimate.available_vram_gb > 0 ? estimate.total_vram_gb / estimate.available_vram_gb : 0;
 
     return (
         <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
             <div className="flex items-center justify-between mb-2">
                 <p className="text-xs font-semibold text-slate-300">Estimation mémoire</p>
-                {!estimate.has_metadata && (
-                    <span className="text-[0.6rem] text-slate-500">
-                        Métadonnées manquantes
-                    </span>
-                )}
+                {!estimate.has_metadata && <span className="text-[0.6rem] text-slate-500">Métadonnées manquantes</span>}
                 {estimate.has_metadata && estimate.offload_ratio > 0 && (
                     <span className="text-[0.6rem] text-slate-500">
                         GPU offload : {Math.round(estimate.offload_ratio * 100)}%
@@ -74,12 +68,8 @@ export default function MemoryEstimationBar({ estimate, loading }: Props) {
                     />
                 </div>
                 <div className="flex justify-between mt-0.5">
-                    <span className="text-[0.55rem] text-slate-600">
-                        Modèle : {fmtGb(estimate.model_ram_gb)} GB
-                    </span>
-                    <span className="text-[0.55rem] text-slate-600">
-                        KV : {fmtGb(estimate.kv_ram_gb)} GB
-                    </span>
+                    <span className="text-[0.55rem] text-slate-600">Modèle : {fmtGb(estimate.model_ram_gb)} GB</span>
+                    <span className="text-[0.55rem] text-slate-600">KV : {fmtGb(estimate.kv_ram_gb)} GB</span>
                 </div>
             </div>
 
@@ -102,16 +92,19 @@ export default function MemoryEstimationBar({ estimate, loading }: Props) {
                         <span className="text-[0.55rem] text-slate-600">
                             Modèle : {fmtGb(estimate.model_vram_gb)} GB
                         </span>
-                        <span className="text-[0.55rem] text-slate-600">
-                            KV : {fmtGb(estimate.kv_vram_gb)} GB
-                        </span>
+                        <span className="text-[0.55rem] text-slate-600">KV : {fmtGb(estimate.kv_vram_gb)} GB</span>
                     </div>
                 </div>
             )}
 
-            <p className="mt-2 text-[0.55rem] text-slate-600">
-                Réserve OS : ~1.5 GB VRAM, ~6 GB RAM non inclus
-            </p>
+            {turboquantBetaModeEnabled && (
+                <p className="mt-2 text-[0.55rem] text-orange-300">
+                    Mode TurboQuant beta actif : estimation indicative, les valeurs reelles peuvent varier.
+                </p>
+            )}
+
+            <p className="mt-2 text-[0.55rem] text-slate-600">Réserve OS : ~1.5 GB VRAM, ~6 GB RAM non inclus</p>
         </div>
     );
 }
+
