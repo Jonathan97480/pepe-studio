@@ -8,6 +8,9 @@ coverage/
 **/build/
 src-tauri/target/
 **/*.log
+*.tsbuildinfo
+build-log.txt
+qwen*-results.json
 
 # Zips / gros binaires
 *.zip

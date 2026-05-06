@@ -1,2 +1,2 @@
-export { TOOL_DOCS } from "./toolDocsData";
+export { TOOL_DOCS } from "./toolDocsCorpusPayload";
 

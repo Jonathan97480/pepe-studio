@@ -1,1 +1,1 @@
-export { default } from "./ChatWindowCore";
+export { default } from "./ChatWindowScreen";

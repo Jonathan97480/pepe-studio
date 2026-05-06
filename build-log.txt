@@ -1,7 +1,0 @@
-
-> pepe-studio-frontend@0.1.0 build
-> next build
-
-  Ôû▓ Next.js 14.2.5
-
-^C^C
